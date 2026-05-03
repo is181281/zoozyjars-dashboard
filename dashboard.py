@@ -188,6 +188,16 @@ invoices = [
 ]
 print(f"   {len(invoices)} paid invoices (excluded {len(invoices_all) - len(invoices)})")
 
+print(f"→ charges (created >= {CUTOFF_DATE})...", flush=True)
+charges_all = fetch_all(stripe.Charge.list, created={"gte": CUTOFF_TS})
+charges = [
+    c for c in charges_all
+    if c.created >= CUTOFF_TS
+    and c.status == "succeeded"
+    and c.customer not in EXCLUDE_CUSTOMER_IDS
+]
+print(f"   {len(charges)} succeeded charges (excluded {len(charges_all) - len(charges)})")
+
 # ------------------------------------------------------------
 # NORMALIZE SUBSCRIPTIONS
 # ------------------------------------------------------------
@@ -375,16 +385,14 @@ for s in sub_rows:
     cohort = dt.datetime.utcfromtimestamp(s["created"]).strftime("%Y-%m")
     subs_by_cohort[cohort].append(s)
 
-# Revenue BILLED during each calendar month (not lifetime per cohort).
-# Sum of paid subscription_cycle invoices with billing date in that month.
+# Revenue BILLED during each calendar month — from Stripe Charges (most accurate).
+# Includes everything: test box charges, renewals, one-off purchases. Subtracts refunds.
 revenue_by_calendar_month = defaultdict(float)
-for inv in invoices:
-    if (inv.amount_paid or 0) <= 0:
-        continue
-    if inv.billing_reason != "subscription_cycle":
-        continue
-    month = dt.datetime.utcfromtimestamp(inv.created).strftime("%Y-%m")
-    revenue_by_calendar_month[month] += to_eur(inv.amount_paid, inv.currency)
+for c in charges:
+    month = dt.datetime.utcfromtimestamp(c.created).strftime("%Y-%m")
+    net = (c.amount or 0) - (c.amount_refunded or 0)
+    if net > 0:
+        revenue_by_calendar_month[month] += to_eur(net, c.currency)
 
 cohort_table = []
 for k in sorted(subs_by_cohort.keys()):
