@@ -375,10 +375,21 @@ for s in sub_rows:
     cohort = dt.datetime.utcfromtimestamp(s["created"]).strftime("%Y-%m")
     subs_by_cohort[cohort].append(s)
 
+# Revenue BILLED during each calendar month (not lifetime per cohort).
+# Sum of paid subscription_cycle invoices with billing date in that month.
+revenue_by_calendar_month = defaultdict(float)
+for inv in invoices:
+    if (inv.amount_paid or 0) <= 0:
+        continue
+    if inv.billing_reason != "subscription_cycle":
+        continue
+    month = dt.datetime.utcfromtimestamp(inv.created).strftime("%Y-%m")
+    revenue_by_calendar_month[month] += to_eur(inv.amount_paid, inv.currency)
+
 cohort_table = []
 for k in sorted(subs_by_cohort.keys()):
     cs = subs_by_cohort[k]
-    revenue = sum(revenue_per_sub.get(s["id"], 0.0) for s in cs)
+    revenue = revenue_by_calendar_month.get(k, 0.0)
     cohort_table.append({
         "cohort": k,
         "size": len(cs),
@@ -814,8 +825,8 @@ a.email:hover { text-decoration: underline; }
           <th class="num">3rd (2nd renewal)</th>
           <th class="num">4th</th>
           <th class="num">5+</th>
-          <th class="num" title="Lifetime revenue from subs in this cohort (sum of all paid renewals so far). NOT revenue billed during the cohort month.">Revenue € (LTD)</th>
-          <th class="num">€/sub</th>
+          <th class="num" title="All renewal revenue billed during this calendar month, regardless of which cohort the subscription belongs to.">Revenue € (this month)</th>
+          <th class="num" title="Revenue this month / cohort size">€/sub</th>
         </tr></thead>
         <tbody id="cohort-table"></tbody>
       </table>
