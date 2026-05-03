@@ -339,21 +339,26 @@ for cid in by_customer:
 # Conversion % = reached / due (only counts mature data).
 # ------------------------------------------------------------
 def funnel_for(subs_list):
+    """For each step S, classify each sub into ONE of: reached / lost / pending.
+    Sum equals total cohort size — every sub is in exactly one bucket per step.
+      reached = actual_step >= S (already reached this step)
+      lost    = actual_step < S AND status is canceled/canceling (will never reach)
+      pending = actual_step < S AND status is alive (might still reach)
+    `due` is also tracked: how many subs SHOULD have reached step S based on age.
+    Conversion % = reached / due (mature-cohort retention only).
+    """
     steps = []
     for S in (1, 2, 3, 4, 5):
-        due = reached = pending = lost = 0
+        due = reached = lost = pending = 0
         for s in subs_list:
             if s["actual_step"] >= S:
                 reached += 1
+            elif s["status"] in ("canceled", "canceling"):
+                lost += 1
+            else:
+                pending += 1
             if s["expected_step"] >= S:
                 due += 1
-            else:
-                # not yet due; pending if not canceled, else won't matter
-                if s["status"] not in ("canceled", "canceling"):
-                    pending += 1
-            # lost: due (time has come) and didn't reach, and is canceled/canceling
-            if s["expected_step"] >= S and s["actual_step"] < S and s["status"] in ("canceled", "canceling"):
-                lost += 1
         conv = round(reached / due * 100, 1) if due else None
         steps.append({
             "step": S,
@@ -804,11 +809,12 @@ a.email:hover { text-decoration: underline; }
         <thead><tr>
           <th>Cohort</th>
           <th class="num">Size</th>
+          <th class="num" title="Canceled/canceling subs (any time)">Lost</th>
           <th class="num">2nd (1st renewal)</th>
           <th class="num">3rd (2nd renewal)</th>
           <th class="num">4th</th>
           <th class="num">5+</th>
-          <th class="num">Revenue €</th>
+          <th class="num" title="Lifetime revenue from subs in this cohort (sum of all paid renewals so far). NOT revenue billed during the cohort month.">Revenue € (LTD)</th>
           <th class="num">€/sub</th>
         </tr></thead>
         <tbody id="cohort-table"></tbody>
@@ -1112,6 +1118,8 @@ function renderCohorts() {
   }).join("");
 
   document.getElementById("cohort-table").innerHTML = DATA.cohorts.map(c => {
+    const step2 = c.steps.find(x => x.step === 2);
+    const lostCount = step2 ? step2.lost : 0;
     const cells = [2, 3, 4, 5].map(S => {
       const st = c.steps.find(x => x.step === S);
       if (!st || st.due === 0) {
@@ -1126,6 +1134,7 @@ function renderCohorts() {
     return `<tr>
        <td><b>${c.cohort}</b></td>
        <td class="num">${c.size}</td>
+       <td class="num" style="color:#a04540;">${lostCount || "—"}</td>
        ${cells}
        <td class="num">${fmt.eur(c.revenue_eur)}</td>
        <td class="num">${fmt.eur2(c.rev_per_sub)}</td>
