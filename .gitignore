@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+.env.local
+.zoozyjars_env
+public/
+reports/
+*.html
+.DS_Store
+.idea/
+.vscode/

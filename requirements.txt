@@ -1,0 +1,2 @@
+stripe>=15.0.0
+cryptography>=42.0.0
