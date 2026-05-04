@@ -574,10 +574,12 @@ HTML_TEMPLATE = r"""<!doctype html>
 <style>
 * { box-sizing: border-box; }
 body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; color: #1a1a1a; background: #faf8f3; margin: 0; }
-header { padding: 20px 28px; background: white; border-bottom: 1px solid #e8e4d8; display: flex; justify-content: space-between; align-items: baseline; }
+header { padding: 20px 28px; background: white; border-bottom: 1px solid #e8e4d8; display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 12px; }
 h1 { margin: 0; font-size: 19px; font-weight: 600; letter-spacing: -0.2px; }
 h1 .accent { color: #5d6f3d; }
-.meta { color: #8b8775; font-size: 12px; font-variant-numeric: tabular-nums; }
+.meta { color: #8b8775; font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; }
+.meta .updated { display: inline-block; padding: 4px 10px; border-radius: 12px; background: #e6efdc; color: #4a7c4a; font-weight: 500; font-size: 12px; }
+.meta .updated .age { font-weight: 400; opacity: 0.7; }
 .container { padding: 20px 28px 60px; max-width: 1500px; margin: 0 auto; }
 
 /* KPI strip */
@@ -796,12 +798,24 @@ a.email:hover { text-decoration: underline; }
   <div class="panel" id="panel-forecast">
     <div class="card">
       <h3>Production forecast — jars needed</h3>
-      <div class="window-tabs">
-        <span class="window-tab" data-window="7">7 days</span>
-        <span class="window-tab" data-window="14">14 days</span>
-        <span class="window-tab on" data-window="30">30 days</span>
-        <span class="window-tab" data-window="60">60 days</span>
-        <span class="window-tab" data-window="90">90 days</span>
+      <div style="display:flex; gap:14px; align-items:end; margin-bottom:14px; flex-wrap: wrap;">
+        <div>
+          <div class="muted" style="font-size:11px; text-transform:uppercase; margin-bottom:4px;">From</div>
+          <input type="date" id="fc-from" style="padding:8px 10px; border:1px solid #d6d2c5; border-radius:6px; font:inherit;">
+        </div>
+        <div>
+          <div class="muted" style="font-size:11px; text-transform:uppercase; margin-bottom:4px;">To</div>
+          <input type="date" id="fc-to" style="padding:8px 10px; border:1px solid #d6d2c5; border-radius:6px; font:inherit;">
+        </div>
+        <div style="display:flex; gap:6px; flex-wrap: wrap;">
+          <span class="window-tab" data-preset="7">7d</span>
+          <span class="window-tab" data-preset="14">14d</span>
+          <span class="window-tab on" data-preset="30">30d</span>
+          <span class="window-tab" data-preset="60">60d</span>
+          <span class="window-tab" data-preset="90">90d</span>
+          <span class="window-tab" data-preset="month">This month</span>
+          <span class="window-tab" data-preset="next-month">Next month</span>
+        </div>
       </div>
       <div style="display:flex; gap:32px; align-items:baseline; margin: 14px 0;">
         <div>
@@ -812,8 +826,12 @@ a.email:hover { text-decoration: underline; }
           <div class="muted" style="font-size:11px; text-transform:uppercase;">Subscriptions</div>
           <div class="big-num" id="forecast-subs">—</div>
         </div>
-        <div class="muted" style="font-size:12px; max-width:380px;">
-          Only <b>active</b> subscriptions counted. Each scheduled billing within the window = one delivery with the same line items.
+        <div>
+          <div class="muted" style="font-size:11px; text-transform:uppercase;">Days in window</div>
+          <div class="big-num" id="forecast-days">—</div>
+        </div>
+        <div class="muted" style="font-size:12px; max-width:340px;">
+          Only <b>active</b> subscriptions. Each scheduled billing within the window = one delivery with the same line items.
         </div>
       </div>
       <table>
@@ -920,8 +938,22 @@ const fmt = {
 // ============ KPI strip ============
 function renderKPI() {
   const k = DATA.kpi;
+  // "Last updated" with relative age
+  const gen = new Date(DATA.generated_at);
+  const ageMs = Date.now() - gen.getTime();
+  const ageMin = Math.floor(ageMs / 60000);
+  const ageHr = Math.floor(ageMin / 60);
+  const ageStr = ageMin < 1 ? "just now"
+    : ageMin < 60 ? `${ageMin} min ago`
+    : ageHr < 24 ? `${ageHr}h ago`
+    : `${Math.floor(ageHr/24)}d ago`;
+  const genLocal = gen.toLocaleString("en-GB", {
+    year: "numeric", month: "short", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", timeZone: "Europe/Warsaw"
+  });
   document.getElementById("meta").innerHTML =
-    `Data from <b>${DATA.cutoff_date}</b> · ${DATA.subs.length} subs · ${DATA.ltv.length} customers · generated ${DATA.generated_at}`;
+    `<div class="updated">⟳ Updated ${genLocal} <span class="age">· ${ageStr}</span></div>` +
+    `<div style="margin-top:6px; font-size:11px;">Data from <b>${DATA.cutoff_date}</b> · ${DATA.subs.length} subs · ${DATA.ltv.length} customers</div>`;
   const cards = [
     {cls: "active", label: "Active", value: fmt.num(k.active), delta: `${k.active_paid} paying · ${k.active_trial} in trial`},
     {cls: "paused", label: "Paused", value: fmt.num(k.paused), delta: `${k.paused_paid} paid · ${k.paused_trial} in trial`},
@@ -1091,28 +1123,109 @@ function bindSubsFilters() {
   });
 }
 
-// ============ Forecast ============
-let forecastWindow = 30;
+// ============ Forecast (client-side, free date range) ============
+function computeForecast(fromTs, toTs) {
+  // For each active sub, walk forward through billing cycles within [from, to]
+  const byProduct = {};
+  let totalJars = 0;
+  const subSet = new Set();
+  for (const s of DATA.subs) {
+    if (s.status !== "active") continue;
+    if (!s.current_period_end || !s.period_days) continue;
+    let nextCharge = s.current_period_end;
+    const periodSecs = s.period_days * 86400;
+    for (let i = 0; i < 100 && nextCharge <= toTs; i++) {
+      if (nextCharge >= fromTs) {
+        for (const it of s.items) {
+          if (!byProduct[it.product_name]) byProduct[it.product_name] = {jars: 0, subs: new Set()};
+          byProduct[it.product_name].jars += it.qty;
+          byProduct[it.product_name].subs.add(s.id);
+        }
+        totalJars += s.n_jars;
+        subSet.add(s.id);
+      }
+      nextCharge += periodSecs;
+    }
+  }
+  const products = Object.entries(byProduct)
+    .map(([p, v]) => ({product: p, jars: v.jars, subs: v.subs.size}))
+    .sort((a, b) => b.jars - a.jars);
+  return {products, total_jars: totalJars, total_subs: subSet.size};
+}
+
+function fcDates() {
+  const fromEl = document.getElementById("fc-from");
+  const toEl = document.getElementById("fc-to");
+  const fromDate = new Date(fromEl.value);
+  const toDate = new Date(toEl.value);
+  toDate.setHours(23, 59, 59);
+  return {
+    from: fromDate.getTime() / 1000,
+    to: toDate.getTime() / 1000,
+    days: Math.max(1, Math.ceil((toDate - fromDate) / 86400000)),
+  };
+}
+
 function renderForecast() {
-  const f = DATA.forecast[forecastWindow];
+  const {from, to, days} = fcDates();
+  if (!from || !to || from > to) return;
+  const f = computeForecast(from, to);
   document.getElementById("forecast-jars").textContent = fmt.num(f.total_jars);
   document.getElementById("forecast-subs").textContent = fmt.num(f.total_subs);
-  document.getElementById("forecast-table").innerHTML = f.products.map(p =>
-    `<tr>
-       <td>${p.product}</td>
-       <td class="num">${fmt.num(p.jars)}</td>
-       <td class="num">${fmt.num(p.subs)}</td>
-       <td class="num muted">${(p.jars / Math.max(p.subs, 1)).toFixed(1)}</td>
-     </tr>`
-  ).join("");
+  document.getElementById("forecast-days").textContent = days;
+  document.getElementById("forecast-table").innerHTML = f.products.length === 0
+    ? `<tr><td colspan="4" class="muted" style="text-align:center; padding:24px;">No deliveries scheduled in this window</td></tr>`
+    : f.products.map(p =>
+        `<tr>
+           <td>${p.product}</td>
+           <td class="num">${fmt.num(p.jars)}</td>
+           <td class="num">${fmt.num(p.subs)}</td>
+           <td class="num muted">${(p.jars / Math.max(p.subs, 1)).toFixed(1)}</td>
+         </tr>`
+      ).join("");
 }
+
+function setForecastDates(fromDate, toDate) {
+  document.getElementById("fc-from").value = fromDate.toISOString().slice(0, 10);
+  document.getElementById("fc-to").value = toDate.toISOString().slice(0, 10);
+  renderForecast();
+}
+
 function bindForecast() {
-  document.querySelectorAll(".window-tab").forEach(t => {
+  // Initialize: today → today+30
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const plus30 = new Date(today);
+  plus30.setDate(plus30.getDate() + 30);
+  setForecastDates(today, plus30);
+
+  document.getElementById("fc-from").onchange = () => {
+    document.querySelectorAll("[data-preset]").forEach(x => x.classList.remove("on"));
+    renderForecast();
+  };
+  document.getElementById("fc-to").onchange = () => {
+    document.querySelectorAll("[data-preset]").forEach(x => x.classList.remove("on"));
+    renderForecast();
+  };
+
+  document.querySelectorAll("[data-preset]").forEach(t => {
     t.onclick = () => {
-      document.querySelectorAll(".window-tab").forEach(x => x.classList.remove("on"));
+      document.querySelectorAll("[data-preset]").forEach(x => x.classList.remove("on"));
       t.classList.add("on");
-      forecastWindow = +t.dataset.window;
-      renderForecast();
+      const today = new Date(); today.setHours(0,0,0,0);
+      const preset = t.dataset.preset;
+      let from = today, to = today;
+      if (preset === "month") {
+        from = new Date(today.getFullYear(), today.getMonth(), 1);
+        to = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+      } else if (preset === "next-month") {
+        from = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+        to = new Date(today.getFullYear(), today.getMonth() + 2, 0);
+      } else {
+        const days = +preset;
+        to = new Date(today); to.setDate(to.getDate() + days);
+      }
+      setForecastDates(from, to);
     };
   });
 }
