@@ -849,18 +849,18 @@ a.email:hover { text-decoration: underline; }
   <!-- Cohorts -->
   <div class="panel" id="panel-cohorts">
     <div class="card">
-      <h3>Funnel — time-aware retention</h3>
+      <h3>Funnel — retention</h3>
       <div class="muted" style="font-size:12px; margin-bottom: 14px;">
-        Conversion for each step = <b>reached / due by time</b>.
-        Subscriptions younger than required age aren't evaluated yet — they're shown as <span style="color:#4a6585;">pipeline</span> (will appear in future reports).
-        Lost = canceled/canceling before they were due to pay.
+        Conversion = <b>reached / (reached + lost)</b>, i.e. % among subs that already decided.
+        <span style="color:#4a6585;">Pipeline</span> = still alive, undecided (in trial or paused). They might still convert or churn.
+        Always: <b>reached + lost + pipeline = cohort size</b>.
       </div>
       <div id="total-funnel" style="display:flex; gap:14px; align-items:stretch; padding: 4px 0 8px;"></div>
     </div>
     <div class="card">
       <h3>Cohorts by signup month</h3>
       <div class="muted" style="font-size:12px; margin-bottom:10px;">
-        Each cell: <b>reached / due</b> · <b>%</b> · <span style="color:#4a6585;">+ pipeline</span>. "—" means no one was due to reach this step yet.
+        Each cell: <b>reached / decided</b> · <b>%</b> · <span style="color:#4a6585;">+ pipeline</span>. "—" means no one decided yet (all in pipeline).
       </div>
       <table class="heat" id="cohort-table-wrap">
         <thead><tr>
@@ -1248,10 +1248,18 @@ const STEP_LABELS = {
   5: "5+ (4+ renewals)",
 };
 
+// Compute conversion among DECIDED subs (reached + lost). Pending = uncertain.
+// reached + lost + pending = cohort size (always).
+function decidedConv(st) {
+  const decided = st.reached + st.lost;
+  return decided > 0 ? (st.reached / decided * 100) : null;
+}
+
 function renderCohorts() {
   const steps = DATA.total_funnel_steps;
   document.getElementById("total-funnel").innerHTML = steps.map(s => {
-    const conv = s.conversion;
+    const conv = decidedConv(s);
+    const decided = s.reached + s.lost;
     const convDisplay = conv == null ? "—" : conv.toFixed(0) + "%";
     const convColor = conv == null ? "#8b8775" : (conv >= 50 ? "#5d8a3d" : conv >= 25 ? "#b58a30" : "#a04540");
     return `
@@ -1259,7 +1267,7 @@ function renderCohorts() {
         <div class="muted" style="font-size:10px; text-transform:uppercase; letter-spacing:0.5px;">${STEP_LABELS[s.step]}</div>
         <div style="display:flex; align-items:baseline; gap:8px; margin-top:6px;">
           <div style="font-size:26px; font-weight:600; color:${convColor}; font-variant-numeric:tabular-nums;">${convDisplay}</div>
-          <div class="muted" style="font-size:12px;">${s.reached} / ${s.due}</div>
+          <div class="muted" style="font-size:12px;">${s.reached} / ${decided}</div>
         </div>
         <div style="margin-top:10px; display:flex; flex-direction:column; gap:3px; font-size:11px;">
           <div>✓ Reached: <b>${s.reached}</b></div>
@@ -1274,13 +1282,15 @@ function renderCohorts() {
     const lostCount = step2 ? step2.lost : 0;
     const cells = [2, 3, 4, 5].map(S => {
       const st = c.steps.find(x => x.step === S);
-      if (!st || st.due === 0) {
-        return `<td class="num"><span class="muted">—</span>${st && st.pending ? ` <span style="color:#4a6585; font-size:11px;">+${st.pending}</span>` : ""}</td>`;
+      if (!st) return `<td class="num"><span class="muted">—</span></td>`;
+      const decided = st.reached + st.lost;
+      const conv = decidedConv(st);
+      const pendingTxt = st.pending ? ` <span style="color:#4a6585; font-size:11px;" title="still in pipeline (could still go either way)">+${st.pending}</span>` : "";
+      if (decided === 0) {
+        return `<td class="num"><span class="muted">—</span>${pendingTxt}</td>`;
       }
-      const pct = st.conversion;
-      const pendingTxt = st.pending ? ` <span style="color:#4a6585; font-size:11px;" title="still in pipeline">+${st.pending}</span>` : "";
       return `<td class="num">
-        <span class="hb" style="${heatColor(pct)}">${st.reached}/${st.due} · ${pct}%</span>${pendingTxt}
+        <span class="hb" style="${heatColor(conv)}">${st.reached}/${decided} · ${conv.toFixed(0)}%</span>${pendingTxt}
       </td>`;
     }).join("");
     return `<tr>
