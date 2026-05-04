@@ -716,6 +716,7 @@ a.email:hover { text-decoration: underline; }
     <div class="tab" data-panel="forecast">Production</div>
     <div class="tab" data-panel="cohorts">Cohorts</div>
     <div class="tab" data-panel="payback">Payback</div>
+    <div class="tab" data-panel="forecast2">Forecast</div>
   </div>
 
   <!-- Overview -->
@@ -918,7 +919,85 @@ a.email:hover { text-decoration: underline; }
       </div>
     </div>
   </div>
-</div>
+
+  <!-- Forecast -->
+  <div class="panel" id="panel-forecast2">
+    <div class="card">
+      <h3>Forecast — adjustable parameters</h3>
+      <div class="muted" style="font-size:12px; margin-bottom:14px;">
+        Edit any parameter — table recalculates live. Defaults pulled from current data and assumptions you've shared.
+      </div>
+      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px;">
+        <div>
+          <label class="muted" style="font-size:10px; text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:4px;">Daily acquisition rate</label>
+          <input type="number" id="fc2-acq" step="0.1" min="0" style="width:100%; padding:8px; border:1px solid #d6d2c5; border-radius:6px;">
+          <div class="muted" style="font-size:11px; margin-top:3px;" id="fc2-acq-hint"></div>
+        </div>
+        <div>
+          <label class="muted" style="font-size:10px; text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:4px;">Trial → 1st renewal (r1)</label>
+          <input type="number" id="fc2-r1" step="0.05" min="0" max="1" style="width:100%; padding:8px; border:1px solid #d6d2c5; border-radius:6px;">
+          <div class="muted" style="font-size:11px; margin-top:3px;">% past trial</div>
+        </div>
+        <div>
+          <label class="muted" style="font-size:10px; text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:4px;">Per-cycle retention (r2)</label>
+          <input type="number" id="fc2-r2" step="0.05" min="0" max="1" style="width:100%; padding:8px; border:1px solid #d6d2c5; border-radius:6px;">
+          <div class="muted" style="font-size:11px; margin-top:3px;">% renewal-to-renewal</div>
+        </div>
+        <div>
+          <label class="muted" style="font-size:10px; text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:4px;">CAC €</label>
+          <input type="number" id="fc2-cac" step="1" min="0" style="width:100%; padding:8px; border:1px solid #d6d2c5; border-radius:6px;">
+        </div>
+        <div>
+          <label class="muted" style="font-size:10px; text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:4px;">Renewal margin %</label>
+          <input type="number" id="fc2-margin" step="0.05" min="0" max="1" style="width:100%; padding:8px; border:1px solid #d6d2c5; border-radius:6px;">
+        </div>
+        <div>
+          <label class="muted" style="font-size:10px; text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:4px;">Test box price €</label>
+          <input type="number" id="fc2-tbprice" step="1" min="0" style="width:100%; padding:8px; border:1px solid #d6d2c5; border-radius:6px;">
+        </div>
+        <div>
+          <label class="muted" style="font-size:10px; text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:4px;">Test box jars</label>
+          <input type="number" id="fc2-tbjars" step="1" min="0" style="width:100%; padding:8px; border:1px solid #d6d2c5; border-radius:6px;">
+        </div>
+        <div>
+          <label class="muted" style="font-size:10px; text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:4px;">Cycle days</label>
+          <input type="number" id="fc2-cycle" step="1" min="1" style="width:100%; padding:8px; border:1px solid #d6d2c5; border-radius:6px;">
+        </div>
+        <div>
+          <label class="muted" style="font-size:10px; text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:4px;">Trial days</label>
+          <input type="number" id="fc2-trial" step="1" min="0" style="width:100%; padding:8px; border:1px solid #d6d2c5; border-radius:6px;">
+        </div>
+        <div>
+          <label class="muted" style="font-size:10px; text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:4px;">Months forward</label>
+          <input type="number" id="fc2-months" step="1" min="1" max="12" style="width:100%; padding:8px; border:1px solid #d6d2c5; border-radius:6px;">
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Forecast results</h3>
+      <table id="fc2-table">
+        <thead><tr>
+          <th>Month</th>
+          <th class="num" title="All subs alive at end of month (incl. trial)">Active (end)</th>
+          <th class="num" title="Subs past trial actually paying">Paying (end)</th>
+          <th class="num">MRR €</th>
+          <th class="num">New acq</th>
+          <th class="num" title="Test boxes shipped this month × jars per box">TB jars</th>
+          <th class="num" title="Renewal jars shipped">Ren jars</th>
+          <th class="num" title="Total jars">Total jars</th>
+          <th class="num" title="Test box revenue this month">TB rev €</th>
+          <th class="num" title="Renewal revenue this month">Ren rev €</th>
+          <th class="num">Revenue €</th>
+          <th class="num" title="Revenue − CAC (no COGS)">Cashflow €</th>
+          <th class="num" title="Renewal margin − CAC (with COGS)">P&L €</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+      <div id="fc2-summary" class="muted" style="margin-top:12px; font-size:12px;"></div>
+    </div>
+  </div>
+
 </div><!-- /#app -->
 
 <script>
@@ -1358,6 +1437,240 @@ function bindTabs() {
   });
 }
 
+// ============ Forecast tab ============
+function fc2RecentDailyAcq() {
+  // average new subs per day over last 7 days
+  const now = Date.now() / 1000;
+  const sevenAgo = now - 7 * 86400;
+  const recent = DATA.subs.filter(s => s.created >= sevenAgo).length;
+  return recent / 7;
+}
+
+function fc2AverageMrrJars() {
+  const active = DATA.subs.filter(s => s.status === "active");
+  if (!active.length) return {mrr: 125, jars: 23};
+  const mrr = active.reduce((a, b) => a + b.mrr_eur, 0) / active.length;
+  const jars = active.reduce((a, b) => a + b.n_jars, 0) / active.length;
+  return {mrr, jars};
+}
+
+function fc2BuildCohorts(p) {
+  const today = new Date(); today.setHours(0,0,0,0);
+  const todayTs = today.getTime() / 1000;
+  const cohorts = [];
+  // Existing alive subs
+  for (const s of DATA.subs) {
+    if (s.status === "canceled") continue;
+    const ageNow = (todayTs - s.created) / 86400;
+    cohorts.push({
+      startTs: s.created,
+      count: 1,
+      ageNow,
+      isExisting: true,
+      mrr: s.mrr_eur,
+      jars: s.n_jars,
+      status: s.status,
+      phase: s.phase,
+    });
+  }
+  // New cohorts (one per future day) up to end of horizon
+  const horizonEnd = new Date(today.getFullYear(), today.getMonth() + p.months + 1, 0); // last day of last forecast month
+  horizonEnd.setHours(23, 59, 59);
+  const lastDay = Math.ceil((horizonEnd - today) / 86400000);
+  const avg = fc2AverageMrrJars();
+  for (let d = 1; d <= lastDay; d++) {
+    const startDt = new Date(today); startDt.setDate(startDt.getDate() + d);
+    cohorts.push({
+      startTs: startDt.getTime() / 1000,
+      count: p.acq,
+      ageNow: -d,
+      isExisting: false,
+      mrr: avg.mrr,
+      jars: avg.jars,
+      status: "active",
+      phase: "trial",
+    });
+  }
+  return cohorts;
+}
+
+function fc2Survival(age, p) {
+  if (age < p.trialDays) return 1.0;
+  const nRenewals = 1 + Math.floor((age - p.trialDays) / p.cycleDays);
+  if (nRenewals === 1) return p.r1;
+  return p.r1 * Math.pow(p.r2, nRenewals - 1);
+}
+
+function fc2SnapshotAt(cohorts, targetTs, p) {
+  let active = 0, paying = 0, mrrSum = 0;
+  for (const c of cohorts) {
+    const daysSince = (targetTs - c.startTs) / 86400;
+    if (daysSince < 0) continue;
+    let s;
+    if (c.isExisting) {
+      const sNow = fc2Survival(c.ageNow, p);
+      s = sNow > 0 ? fc2Survival(daysSince, p) / sNow : 0;
+    } else {
+      s = fc2Survival(daysSince, p);
+    }
+    if (c.status === "canceling" && daysSince - c.ageNow > p.cycleDays) s = 0;
+    const isPaying = daysSince >= p.trialDays && c.phase !== "paused" && c.status !== "paused";
+    active += c.count * s;
+    if (isPaying) {
+      paying += c.count * s;
+      mrrSum += c.count * s * c.mrr;
+    }
+  }
+  return {active, paying, mrr: mrrSum};
+}
+
+function fc2Period(cohorts, startTs, endTs, p) {
+  let testBoxes = 0, renewalRev = 0, renewalJars = 0, newAcq = 0;
+  for (const c of cohorts) {
+    const maxAge = (endTs - c.startTs) / 86400;
+    // Test box at age 0
+    if (c.startTs >= startTs && c.startTs <= endTs) {
+      testBoxes += c.count;
+      if (!c.isExisting) newAcq += c.count;
+    }
+    // Renewals
+    let age = p.trialDays;
+    while (age <= maxAge + 1) {
+      const shipTs = c.startTs + age * 86400;
+      if (shipTs >= startTs && shipTs <= endTs) {
+        let prob;
+        if (c.isExisting) {
+          const sNow = fc2Survival(c.ageNow, p);
+          if (sNow <= 0 || age < c.ageNow - 0.5) { age += p.cycleDays; continue; }
+          prob = fc2Survival(age, p) / sNow;
+        } else {
+          prob = fc2Survival(age, p);
+        }
+        const skipCanceling = c.status === "canceling" && age - c.ageNow > p.cycleDays;
+        const skipPaused = (c.phase === "paused" || c.status === "paused") && age > p.trialDays;
+        if (!skipCanceling && !skipPaused) {
+          renewalRev += c.count * prob * c.mrr * p.cycleDays / 30;
+          renewalJars += c.count * prob * c.jars;
+        }
+      }
+      age += p.cycleDays;
+    }
+  }
+  return {testBoxes, renewalRev, renewalJars, newAcq};
+}
+
+function renderFC2() {
+  const p = {
+    acq: parseFloat(document.getElementById("fc2-acq").value) || 0,
+    r1: parseFloat(document.getElementById("fc2-r1").value) || 0,
+    r2: parseFloat(document.getElementById("fc2-r2").value) || 0,
+    cac: parseFloat(document.getElementById("fc2-cac").value) || 0,
+    margin: parseFloat(document.getElementById("fc2-margin").value) || 0,
+    tbPrice: parseFloat(document.getElementById("fc2-tbprice").value) || 0,
+    tbJars: parseFloat(document.getElementById("fc2-tbjars").value) || 0,
+    cycleDays: parseInt(document.getElementById("fc2-cycle").value) || 28,
+    trialDays: parseInt(document.getElementById("fc2-trial").value) || 9,
+    months: parseInt(document.getElementById("fc2-months").value) || 2,
+  };
+  const cohorts = fc2BuildCohorts(p);
+  const today = new Date(); today.setHours(0,0,0,0);
+  const rows = [];
+  let cum = {revenue: 0, cashflow: 0, pnl: 0, jars: 0, newAcq: 0};
+  for (let m = 0; m <= p.months; m++) {
+    const monthStart = new Date(today.getFullYear(), today.getMonth() + m, 1);
+    const monthEnd = new Date(today.getFullYear(), today.getMonth() + m + 1, 0);
+    monthEnd.setHours(23, 59, 59);
+    const startTs = monthStart.getTime() / 1000;
+    const endTs = monthEnd.getTime() / 1000;
+    const snap = fc2SnapshotAt(cohorts, endTs, p);
+    const fin = fc2Period(cohorts, startTs, endTs, p);
+    const tbRev = fin.testBoxes * p.tbPrice;
+    const tbJarsTotal = fin.testBoxes * p.tbJars;
+    const totalRev = tbRev + fin.renewalRev;
+    const totalJars = tbJarsTotal + fin.renewalJars;
+    const cacOut = fin.newAcq * p.cac;
+    const cashflow = totalRev - cacOut;
+    const pnl = fin.renewalRev * p.margin - cacOut;
+    cum.revenue += totalRev;
+    cum.cashflow += cashflow;
+    cum.pnl += pnl;
+    cum.jars += totalJars;
+    cum.newAcq += fin.newAcq;
+    rows.push({
+      label: monthStart.toLocaleDateString("en-GB", {month:"short", year:"numeric"}),
+      ...snap,
+      newAcq: fin.newAcq,
+      tbJars: tbJarsTotal,
+      renewalJars: fin.renewalJars,
+      totalJars,
+      tbRev, renewalRev: fin.renewalRev, totalRev,
+      cashflow, pnl,
+    });
+  }
+
+  const tbody = document.querySelector("#fc2-table tbody");
+  tbody.innerHTML = rows.map(r => `
+    <tr>
+      <td><b>${r.label}</b></td>
+      <td class="num">${fmt.num(Math.round(r.active))}</td>
+      <td class="num">${fmt.num(Math.round(r.paying))}</td>
+      <td class="num">${fmt.eur(r.mrr)}</td>
+      <td class="num">${fmt.num(Math.round(r.newAcq))}</td>
+      <td class="num">${fmt.num(Math.round(r.tbJars))}</td>
+      <td class="num">${fmt.num(Math.round(r.renewalJars))}</td>
+      <td class="num"><b>${fmt.num(Math.round(r.totalJars))}</b></td>
+      <td class="num">${fmt.eur(r.tbRev)}</td>
+      <td class="num">${fmt.eur(r.renewalRev)}</td>
+      <td class="num"><b>${fmt.eur(r.totalRev)}</b></td>
+      <td class="num" style="color:${r.cashflow>=0?'#4a7c4a':'#a04540'}; font-weight:600;">${r.cashflow>=0?'+':''}${fmt.eur(r.cashflow)}</td>
+      <td class="num" style="color:${r.pnl>=0?'#4a7c4a':'#a04540'}; font-weight:600;">${r.pnl>=0?'+':''}${fmt.eur(r.pnl)}</td>
+    </tr>
+  `).join("");
+  // Cumulative footer
+  tbody.innerHTML += `
+    <tr style="background:#f7f4eb; font-weight:600;">
+      <td>Cumulative</td>
+      <td class="num muted">—</td>
+      <td class="num muted">—</td>
+      <td class="num muted">—</td>
+      <td class="num">${fmt.num(Math.round(cum.newAcq))}</td>
+      <td class="num muted">—</td>
+      <td class="num muted">—</td>
+      <td class="num">${fmt.num(Math.round(cum.jars))}</td>
+      <td class="num muted">—</td>
+      <td class="num muted">—</td>
+      <td class="num">${fmt.eur(cum.revenue)}</td>
+      <td class="num" style="color:${cum.cashflow>=0?'#4a7c4a':'#a04540'};">${cum.cashflow>=0?'+':''}${fmt.eur(cum.cashflow)}</td>
+      <td class="num" style="color:${cum.pnl>=0?'#4a7c4a':'#a04540'};">${cum.pnl>=0?'+':''}${fmt.eur(cum.pnl)}</td>
+    </tr>`;
+}
+
+function initFC2() {
+  // Defaults from data + assumptions
+  const acq = fc2RecentDailyAcq();
+  const def = {
+    acq: acq.toFixed(2),
+    r1: 0.6, r2: 0.9, cac: 45, margin: 0.45,
+    tbPrice: 14, tbJars: 3, cycleDays: 28, trialDays: 9, months: 2,
+  };
+  document.getElementById("fc2-acq").value = def.acq;
+  document.getElementById("fc2-acq-hint").textContent = `recent 7d avg: ${acq.toFixed(2)}/day`;
+  document.getElementById("fc2-r1").value = def.r1;
+  document.getElementById("fc2-r2").value = def.r2;
+  document.getElementById("fc2-cac").value = def.cac;
+  document.getElementById("fc2-margin").value = def.margin;
+  document.getElementById("fc2-tbprice").value = def.tbPrice;
+  document.getElementById("fc2-tbjars").value = def.tbJars;
+  document.getElementById("fc2-cycle").value = def.cycleDays;
+  document.getElementById("fc2-trial").value = def.trialDays;
+  document.getElementById("fc2-months").value = def.months;
+  // Bind
+  document.querySelectorAll("[id^=fc2-]").forEach(el => {
+    if (el.tagName === "INPUT") el.oninput = renderFC2;
+  });
+  renderFC2();
+}
+
 // ============ Init ============
 function initApp() {
   document.getElementById("app").classList.add("show");
@@ -1374,6 +1687,7 @@ function initApp() {
   bindSubsFilters();
   bindForecast();
   bindPayback();
+  initFC2();
 }
 
 // ============ Password gate (AES-GCM via Web Crypto) ============
