@@ -188,15 +188,27 @@ invoices = [
 ]
 print(f"   {len(invoices)} paid invoices (excluded {len(invoices_all) - len(invoices)})")
 
-print(f"→ charges (created >= {CUTOFF_DATE})...", flush=True)
-charges_all = fetch_all(stripe.Charge.list, created={"gte": CUTOFF_TS})
-charges = [
-    c for c in charges_all
-    if c.created >= CUTOFF_TS
-    and c.status == "succeeded"
-    and c.customer not in EXCLUDE_CUSTOMER_IDS
-]
-print(f"   {len(charges)} succeeded charges (excluded {len(charges_all) - len(charges)})")
+# For monthly revenue display we want to match Stripe Dashboard exactly,
+# so we pull ALL PaymentIntents from the start of the calendar month containing
+# CUTOFF_DATE (e.g. all of April even if cutoff is Apr 12). This way the
+# "April" column matches Stripe's "April 1-30" view.
+REVENUE_FETCH_FROM = dt.datetime(
+    int(CUTOFF_DATE[:4]), int(CUTOFF_DATE[5:7]), 1
+)
+REVENUE_FETCH_TS = int(REVENUE_FETCH_FROM.timestamp())
+
+print(f"→ payment intents (created >= {REVENUE_FETCH_FROM.date()})...", flush=True)
+pis_all = fetch_all(stripe.PaymentIntent.list, created={"gte": REVENUE_FETCH_TS})
+# For monthly revenue we DON'T exclude Igor / old subs — those are still real
+# cash transactions and must match Stripe Dashboard. Cohort/sub analytics use
+# their own exclusion logic.
+payment_intents = [pi for pi in pis_all if pi.status == "succeeded"]
+print(f"   {len(payment_intents)} succeeded PIs (out of {len(pis_all)})")
+
+print(f"→ refunds (created >= {REVENUE_FETCH_FROM.date()})...", flush=True)
+refunds_all = fetch_all(stripe.Refund.list, created={"gte": REVENUE_FETCH_TS})
+refunds = [r for r in refunds_all if r.status == "succeeded"]
+print(f"   {len(refunds)} successful refunds")
 
 # ------------------------------------------------------------
 # NORMALIZE SUBSCRIPTIONS
@@ -385,14 +397,22 @@ for s in sub_rows:
     cohort = dt.datetime.utcfromtimestamp(s["created"]).strftime("%Y-%m")
     subs_by_cohort[cohort].append(s)
 
-# Revenue BILLED during each calendar month — from Stripe Charges (most accurate).
-# Includes everything: test box charges, renewals, one-off purchases. Subtracts refunds.
+# Revenue BILLED during each calendar month — gross PaymentIntents minus refunds.
+# Group by Warsaw timezone (Stripe account TZ) to match Stripe Dashboard exactly.
+# Covers all payment methods (cards, BLIK, Klarna, etc.).
+import zoneinfo
+WARSAW = zoneinfo.ZoneInfo("Europe/Warsaw")
+def month_warsaw(unix_ts):
+    return dt.datetime.fromtimestamp(unix_ts, tz=WARSAW).strftime("%Y-%m")
+
 revenue_by_calendar_month = defaultdict(float)
-for c in charges:
-    month = dt.datetime.utcfromtimestamp(c.created).strftime("%Y-%m")
-    net = (c.amount or 0) - (c.amount_refunded or 0)
-    if net > 0:
-        revenue_by_calendar_month[month] += to_eur(net, c.currency)
+for pi in payment_intents:
+    month = month_warsaw(pi.created)
+    revenue_by_calendar_month[month] += to_eur(pi.amount, pi.currency)
+# Subtract refunds (attributed to the month the refund was issued)
+for r in refunds:
+    month = month_warsaw(r.created)
+    revenue_by_calendar_month[month] -= to_eur(r.amount, r.currency)
 
 cohort_table = []
 for k in sorted(subs_by_cohort.keys()):
