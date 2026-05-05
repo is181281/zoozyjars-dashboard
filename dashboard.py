@@ -789,6 +789,7 @@ a.email:hover { text-decoration: underline; }
         <th data-key="status">Status</th>
         <th data-key="email">Customer</th>
         <th data-key="lang">Lang</th>
+        <th class="num" data-key="actual_step" title="Total orders including test box (1 = only test box, 2 = test box + 1st renewal, etc.)">Orders</th>
         <th class="num" data-key="n_jars">Jars</th>
         <th class="num" data-key="period_days">Cycle</th>
         <th class="num" data-key="mrr_eur">MRR €</th>
@@ -1149,6 +1150,9 @@ function renderSubs() {
       `<span class="item"><span class="qty">${it.qty}×</span> ${it.product_name}</span>`
     ).join("");
     const phasePill = s.phase === "trial" ? `<span class="pill trial" title="in 9-day trial, no renewal paid yet">trial</span>` : "";
+    const ordersBadge = s.actual_step >= 2
+      ? `<b style="color:#5d6f3d;">${s.actual_step}</b>`
+      : `<span class="muted">${s.actual_step}</span>`;
     return `
       <tr class="row" data-id="${s.id}">
         <td><span class="pill ${s.status}">${s.status}</span> ${phasePill}</td>
@@ -1157,13 +1161,14 @@ function renderSubs() {
           <div class="muted" style="font-size:11px;">${s.email ? `<a class="email" href="mailto:${s.email}">${s.email}</a>` : ""}</div>
         </td>
         <td>${s.lang || "<span class='muted'>—</span>"}</td>
+        <td class="num">${ordersBadge}</td>
         <td class="num">${s.n_jars}</td>
         <td class="num">${cycle}</td>
         <td class="num">${fmt.eur2(s.mrr_eur)}</td>
         <td>${fmt.date(s.created)} <span class="muted" style="font-size:11px;">(${fmt.daysAgo(s.created)})</span></td>
         <td>${fmt.date(s.current_period_end)}</td>
       </tr>
-      <tr class="detail-row" style="display:none;"><td colspan="8" class="detail">
+      <tr class="detail-row" style="display:none;"><td colspan="9" class="detail">
         <div><b>${s.id}</b> · cust ${s.customer_id} · raw_status: <code>${s.raw_status}</code>
           ${s.cancel_at_period_end ? "· cancel_at_period_end" : ""}
           ${s.pause_collection ? `· paused (${s.pause_collection.behavior || ""})` : ""}
