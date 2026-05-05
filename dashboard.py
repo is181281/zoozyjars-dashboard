@@ -361,13 +361,13 @@ for cid in by_customer:
 # Conversion % = reached / due (only counts mature data).
 # ------------------------------------------------------------
 def funnel_for(subs_list):
-    """For each step S, classify each sub into ONE of: reached / lost / pending.
-    Sum equals total cohort size — every sub is in exactly one bucket per step.
-      reached = actual_step >= S (already reached this step)
-      lost    = actual_step < S AND status is canceled/canceling (will never reach)
-      pending = actual_step < S AND status is alive (might still reach)
-    `due` is also tracked: how many subs SHOULD have reached step S based on age.
-    Conversion % = reached / due (mature-cohort retention only).
+    """Step-by-step funnel: each step is conditional on reaching the previous.
+      reached = actual_step >= S (paid through this step)
+      lost    = reached step S-1 but canceled/canceling before reaching S
+      pending = reached step S-1 but didn't reach S yet, still alive
+    Subs that dropped before step S-1 are NOT counted in this step's funnel.
+    Conversion % = reached / (reached + lost) — % among those who decided
+    after reaching the previous step.
     """
     steps = []
     for S in (1, 2, 3, 4, 5):
@@ -375,13 +375,17 @@ def funnel_for(subs_list):
         for s in subs_list:
             if s["actual_step"] >= S:
                 reached += 1
-            elif s["status"] in ("canceled", "canceling"):
-                lost += 1
-            else:
-                pending += 1
+            elif S == 1 or s["actual_step"] >= S - 1:
+                # Reached the previous step; in this step's denominator
+                if s["status"] in ("canceled", "canceling"):
+                    lost += 1
+                else:
+                    pending += 1
+            # else: dropped out before reaching prior step — not in this funnel
             if s["expected_step"] >= S:
                 due += 1
-        conv = round(reached / due * 100, 1) if due else None
+        decided = reached + lost
+        conv = round(reached / decided * 100, 1) if decided else None
         steps.append({
             "step": S,
             "due": due, "reached": reached, "pending": pending, "lost": lost,
