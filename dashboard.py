@@ -797,7 +797,8 @@ a.email:hover { text-decoration: underline; }
         <th class="num" data-key="mrr_eur">MRR €</th>
         <th data-key="created">Started</th>
         <th data-key="current_period_end">Next bill</th>
-        <th data-key="cancel_reason" title="Free text — type once and it auto-suggests next time. Saved in your browser.">Cancel reason</th>
+        <th data-key="canceled_at" title="When the cancellation was issued (for canceling/canceled subs)">Canceled</th>
+        <th data-key="cancel_reason" title="Free text — type once and it auto-suggests next time. Synced via GitHub.">Cancel reason</th>
       </tr></thead>
       <tbody></tbody>
     </table>
@@ -1322,6 +1323,7 @@ function renderSubs() {
         <td class="num">${fmt.eur2(s.mrr_eur)}</td>
         <td>${fmt.date(s.created)} <span class="muted" style="font-size:11px;">(${fmt.daysAgo(s.created)})</span></td>
         <td>${fmt.date(s.current_period_end)}</td>
+        <td>${s.canceled_at ? `<span style="color:#a04540;">${fmt.date(s.canceled_at)}</span> <span class="muted" style="font-size:11px;">(${fmt.daysAgo(s.canceled_at)})</span>` : "<span class='muted'>—</span>"}</td>
         <td onclick="event.stopPropagation()">
           <input type="text" list="reason-options" data-sub="${s.id}" value="${reasonVal}"
             placeholder="add reason..."
@@ -1329,7 +1331,7 @@ function renderSubs() {
             style="width:160px; padding:4px 8px; border:1px solid #d6d2c5; border-radius:4px; font:inherit; font-size:12px; background:white;">
         </td>
       </tr>
-      <tr class="detail-row" style="display:none;"><td colspan="10" class="detail">
+      <tr class="detail-row" style="display:none;"><td colspan="11" class="detail">
         <div><b>${s.id}</b> · cust ${s.customer_id} · raw_status: <code>${s.raw_status}</code>
           ${s.cancel_at_period_end ? "· cancel_at_period_end" : ""}
           ${s.pause_collection ? `· paused (${s.pause_collection.behavior || ""})` : ""}
