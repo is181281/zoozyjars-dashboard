@@ -783,6 +783,9 @@ a.email:hover { text-decoration: underline; }
       <span class="sep">|</span>
       <input id="search" placeholder="email, name, sub_id..." style="flex:1; min-width:200px;">
       <span class="muted" id="filter-count" style="font-size:12px;"></span>
+      <button id="reasons-export" title="Download cancel reasons as JSON" style="padding:4px 10px; border:1px solid #d6d2c5; border-radius:6px; background:white; cursor:pointer; font-size:12px;">⬇ Export reasons</button>
+      <button id="reasons-import" title="Load reasons from JSON file" style="padding:4px 10px; border:1px solid #d6d2c5; border-radius:6px; background:white; cursor:pointer; font-size:12px;">⬆ Import</button>
+      <input type="file" id="reasons-file" accept=".json" style="display:none;">
     </div>
     <table id="subs-table">
       <thead><tr>
@@ -795,9 +798,11 @@ a.email:hover { text-decoration: underline; }
         <th class="num" data-key="mrr_eur">MRR €</th>
         <th data-key="created">Started</th>
         <th data-key="current_period_end">Next bill</th>
+        <th data-key="cancel_reason" title="Free text — type once and it auto-suggests next time. Saved in your browser.">Cancel reason</th>
       </tr></thead>
       <tbody></tbody>
     </table>
+    <datalist id="reason-options"></datalist>
   </div>
 
   <!-- Forecast -->
@@ -1107,6 +1112,31 @@ function renderSecondaryTables() {
 // ============ Subscriptions table ============
 let subsState = {status: "all", lang: "", cycle: "", phase: "", search: "", sortKey: "mrr_eur", sortDir: -1};
 
+// ----- Cancel-reason store (browser-local) -----
+const REASON_KEY = "zj_cancel_reasons";
+function loadReasons() {
+  try { return JSON.parse(localStorage.getItem(REASON_KEY) || "{}"); }
+  catch { return {}; }
+}
+function saveReason(subId, text) {
+  const all = loadReasons();
+  if (text && text.trim()) all[subId] = text.trim();
+  else delete all[subId];
+  localStorage.setItem(REASON_KEY, JSON.stringify(all));
+  refreshReasonOptions();
+}
+function refreshReasonOptions() {
+  const all = loadReasons();
+  const unique = [...new Set(Object.values(all))].sort();
+  document.getElementById("reason-options").innerHTML =
+    unique.map(v => `<option value="${v.replace(/"/g, '&quot;')}"></option>`).join("");
+}
+// Annotate each sub with its cancel_reason for sorting/filtering
+function annotateReasons() {
+  const all = loadReasons();
+  for (const s of DATA.subs) s.cancel_reason = all[s.id] || "";
+}
+
 function populateLangFilter() {
   const langs = [...new Set(DATA.subs.map(s => s.lang).filter(Boolean))].sort();
   const sel = document.getElementById("filter-lang");
@@ -1153,6 +1183,7 @@ function renderSubs() {
     const ordersBadge = s.actual_step >= 2
       ? `<b style="color:#5d6f3d;">${s.actual_step}</b>`
       : `<span class="muted">${s.actual_step}</span>`;
+    const reasonVal = (s.cancel_reason || "").replace(/"/g, '&quot;');
     return `
       <tr class="row" data-id="${s.id}">
         <td><span class="pill ${s.status}">${s.status}</span> ${phasePill}</td>
@@ -1167,8 +1198,14 @@ function renderSubs() {
         <td class="num">${fmt.eur2(s.mrr_eur)}</td>
         <td>${fmt.date(s.created)} <span class="muted" style="font-size:11px;">(${fmt.daysAgo(s.created)})</span></td>
         <td>${fmt.date(s.current_period_end)}</td>
+        <td onclick="event.stopPropagation()">
+          <input type="text" list="reason-options" data-sub="${s.id}" value="${reasonVal}"
+            placeholder="add reason..."
+            class="reason-input"
+            style="width:160px; padding:4px 8px; border:1px solid #d6d2c5; border-radius:4px; font:inherit; font-size:12px; background:white;">
+        </td>
       </tr>
-      <tr class="detail-row" style="display:none;"><td colspan="9" class="detail">
+      <tr class="detail-row" style="display:none;"><td colspan="10" class="detail">
         <div><b>${s.id}</b> · cust ${s.customer_id} · raw_status: <code>${s.raw_status}</code>
           ${s.cancel_at_period_end ? "· cancel_at_period_end" : ""}
           ${s.pause_collection ? `· paused (${s.pause_collection.behavior || ""})` : ""}
@@ -1179,13 +1216,60 @@ function renderSubs() {
 
   // expand/collapse on row click
   document.querySelectorAll("#subs-table tr.row").forEach(r => {
-    r.onclick = () => {
+    r.onclick = (e) => {
+      // ignore clicks inside inputs / links
+      if (e.target.tagName === "INPUT" || e.target.tagName === "A") return;
       const next = r.nextElementSibling;
       if (next && next.classList.contains("detail-row")) {
         next.style.display = next.style.display === "none" ? "table-row" : "none";
       }
     };
   });
+  // Bind cancel-reason inputs
+  document.querySelectorAll(".reason-input").forEach(inp => {
+    inp.onchange = (e) => {
+      const subId = e.target.dataset.sub;
+      saveReason(subId, e.target.value);
+      const sub = DATA.subs.find(s => s.id === subId);
+      if (sub) sub.cancel_reason = e.target.value;
+    };
+  });
+}
+
+function bindReasonImportExport() {
+  document.getElementById("reasons-export").onclick = () => {
+    const data = loadReasons();
+    const blob = new Blob([JSON.stringify(data, null, 2)], {type: "application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `zj-cancel-reasons-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+  document.getElementById("reasons-import").onclick = () => {
+    document.getElementById("reasons-file").click();
+  };
+  document.getElementById("reasons-file").onchange = (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const incoming = JSON.parse(ev.target.result);
+        const existing = loadReasons();
+        const merged = {...existing, ...incoming};
+        localStorage.setItem(REASON_KEY, JSON.stringify(merged));
+        annotateReasons();
+        refreshReasonOptions();
+        renderSubs();
+        alert(`Imported ${Object.keys(incoming).length} reasons (merged with existing).`);
+      } catch (err) {
+        alert("Invalid JSON file");
+      }
+    };
+    reader.readAsText(f);
+  };
 }
 
 function bindSubsFilters() {
@@ -1688,12 +1772,15 @@ function initApp() {
   renderStatusPie();
   renderSecondaryTables();
   populateLangFilter();
+  annotateReasons();
+  refreshReasonOptions();
   renderSubs();
   renderForecast();
   renderCohorts();
   renderPayback();
   bindTabs();
   bindSubsFilters();
+  bindReasonImportExport();
   bindForecast();
   bindPayback();
   initFC2();
