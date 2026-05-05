@@ -7,7 +7,7 @@ on:
   workflow_dispatch:  # allow manual run from Actions tab
   push:
     branches: [main]
-    paths:
+    paths:  # only rebuild on code changes; data/** updates from frontend skipped
       - "dashboard.py"
       - ".github/workflows/build.yml"
       - "requirements.txt"

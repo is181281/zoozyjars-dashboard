@@ -783,9 +783,8 @@ a.email:hover { text-decoration: underline; }
       <span class="sep">|</span>
       <input id="search" placeholder="email, name, sub_id..." style="flex:1; min-width:200px;">
       <span class="muted" id="filter-count" style="font-size:12px;"></span>
-      <button id="reasons-export" title="Download cancel reasons as JSON" style="padding:4px 10px; border:1px solid #d6d2c5; border-radius:6px; background:white; cursor:pointer; font-size:12px;">⬇ Export reasons</button>
-      <button id="reasons-import" title="Load reasons from JSON file" style="padding:4px 10px; border:1px solid #d6d2c5; border-radius:6px; background:white; cursor:pointer; font-size:12px;">⬆ Import</button>
-      <input type="file" id="reasons-file" accept=".json" style="display:none;">
+      <span id="sync-status" style="font-size:12px; padding:4px 10px; border-radius:6px; background:#f3efe4; color:#8b8775;" title="GitHub sync status">⊙ Local only</span>
+      <button id="sync-setup" style="padding:4px 10px; border:1px solid #d6d2c5; border-radius:6px; background:white; cursor:pointer; font-size:12px;">⚙ Sync</button>
     </div>
     <table id="subs-table">
       <thead><tr>
@@ -1112,18 +1111,30 @@ function renderSecondaryTables() {
 // ============ Subscriptions table ============
 let subsState = {status: "all", lang: "", cycle: "", phase: "", search: "", sortKey: "mrr_eur", sortDir: -1};
 
-// ----- Cancel-reason store (browser-local) -----
+// ----- Cancel-reason store with GitHub sync -----
 const REASON_KEY = "zj_cancel_reasons";
+const PAT_KEY = "zj_github_pat";
+const REPO = "is181281/zoozyjars-dashboard";
+const REASONS_PATH = "data/cancel_reasons.json";
+const RAW_URL = `https://raw.githubusercontent.com/${REPO}/main/${REASONS_PATH}`;
+const API_URL = `https://api.github.com/repos/${REPO}/contents/${REASONS_PATH}`;
+let reasonFileSha = null;  // GitHub blob SHA, needed for PUT
+let saveDebounce = null;
+
 function loadReasons() {
   try { return JSON.parse(localStorage.getItem(REASON_KEY) || "{}"); }
   catch { return {}; }
+}
+function setReasons(obj) {
+  localStorage.setItem(REASON_KEY, JSON.stringify(obj));
 }
 function saveReason(subId, text) {
   const all = loadReasons();
   if (text && text.trim()) all[subId] = text.trim();
   else delete all[subId];
-  localStorage.setItem(REASON_KEY, JSON.stringify(all));
+  setReasons(all);
   refreshReasonOptions();
+  scheduleGithubSave();
 }
 function refreshReasonOptions() {
   const all = loadReasons();
@@ -1131,10 +1142,123 @@ function refreshReasonOptions() {
   document.getElementById("reason-options").innerHTML =
     unique.map(v => `<option value="${v.replace(/"/g, '&quot;')}"></option>`).join("");
 }
-// Annotate each sub with its cancel_reason for sorting/filtering
 function annotateReasons() {
   const all = loadReasons();
   for (const s of DATA.subs) s.cancel_reason = all[s.id] || "";
+}
+
+function setSyncStatus(text, color) {
+  const el = document.getElementById("sync-status");
+  el.textContent = text;
+  el.style.background = color === "ok" ? "#e6efdc" :
+                        color === "err" ? "#f6d8d4" :
+                        color === "busy" ? "#faecc8" : "#f3efe4";
+  el.style.color = color === "ok" ? "#4a7c4a" :
+                   color === "err" ? "#a04540" :
+                   color === "busy" ? "#8a6a25" : "#8b8775";
+}
+
+async function fetchReasonsFromGithub() {
+  // Public file, no auth needed for reading. Cache-bust to avoid stale CDN.
+  try {
+    const r = await fetch(RAW_URL + "?t=" + Date.now());
+    if (!r.ok) return null;
+    return await r.json();
+  } catch (e) {
+    return null;
+  }
+}
+
+async function fetchReasonFileSha() {
+  // Need SHA for PUT (GitHub API requirement)
+  const pat = localStorage.getItem(PAT_KEY);
+  if (!pat) return null;
+  try {
+    const r = await fetch(API_URL, {headers: {Authorization: `token ${pat}`}});
+    if (r.ok) {
+      const data = await r.json();
+      reasonFileSha = data.sha;
+      return data.sha;
+    }
+  } catch (e) {}
+  return null;
+}
+
+async function pushReasonsToGithub() {
+  const pat = localStorage.getItem(PAT_KEY);
+  if (!pat) return;
+  setSyncStatus("⟳ Saving...", "busy");
+  if (!reasonFileSha) await fetchReasonFileSha();
+  const content = JSON.stringify(loadReasons(), null, 2) + "\n";
+  const body = {
+    message: "Update cancel reasons",
+    content: btoa(unescape(encodeURIComponent(content))),
+    sha: reasonFileSha,
+  };
+  try {
+    const r = await fetch(API_URL, {
+      method: "PUT",
+      headers: {Authorization: `token ${pat}`, "Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    });
+    if (r.ok) {
+      const j = await r.json();
+      reasonFileSha = j.content.sha;
+      setSyncStatus("✓ Synced", "ok");
+    } else if (r.status === 409) {
+      // SHA conflict: refetch and retry once
+      reasonFileSha = null;
+      await fetchReasonFileSha();
+      const r2 = await fetch(API_URL, {
+        method: "PUT",
+        headers: {Authorization: `token ${pat}`, "Content-Type": "application/json"},
+        body: JSON.stringify({...body, sha: reasonFileSha}),
+      });
+      if (r2.ok) {
+        reasonFileSha = (await r2.json()).content.sha;
+        setSyncStatus("✓ Synced", "ok");
+      } else {
+        setSyncStatus("✗ Sync failed", "err");
+      }
+    } else if (r.status === 401 || r.status === 403) {
+      setSyncStatus("✗ Bad PAT", "err");
+    } else {
+      setSyncStatus("✗ Sync failed", "err");
+    }
+  } catch (e) {
+    setSyncStatus("✗ Network error", "err");
+  }
+}
+
+function scheduleGithubSave() {
+  const pat = localStorage.getItem(PAT_KEY);
+  if (!pat) {
+    setSyncStatus("⊙ Local only", "muted");
+    return;
+  }
+  setSyncStatus("⟳ Pending...", "busy");
+  if (saveDebounce) clearTimeout(saveDebounce);
+  saveDebounce = setTimeout(pushReasonsToGithub, 3000);
+}
+
+async function initReasonSync() {
+  // 1. Pull from GitHub on load and merge with localStorage (GitHub wins on conflict)
+  const remote = await fetchReasonsFromGithub();
+  if (remote) {
+    const local = loadReasons();
+    const merged = {...local, ...remote};
+    setReasons(merged);
+    annotateReasons();
+    refreshReasonOptions();
+    if (typeof renderSubs === "function") renderSubs();
+  }
+  // 2. If PAT set, mark synced
+  if (localStorage.getItem(PAT_KEY)) {
+    setSyncStatus("✓ Synced", "ok");
+    fetchReasonFileSha();
+  } else {
+    setSyncStatus("⊙ Read-only", "muted");
+  }
 }
 
 function populateLangFilter() {
@@ -1236,39 +1360,37 @@ function renderSubs() {
   });
 }
 
-function bindReasonImportExport() {
-  document.getElementById("reasons-export").onclick = () => {
-    const data = loadReasons();
-    const blob = new Blob([JSON.stringify(data, null, 2)], {type: "application/json"});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `zj-cancel-reasons-${new Date().toISOString().slice(0,10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-  document.getElementById("reasons-import").onclick = () => {
-    document.getElementById("reasons-file").click();
-  };
-  document.getElementById("reasons-file").onchange = (e) => {
-    const f = e.target.files[0];
-    if (!f) return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      try {
-        const incoming = JSON.parse(ev.target.result);
-        const existing = loadReasons();
-        const merged = {...existing, ...incoming};
-        localStorage.setItem(REASON_KEY, JSON.stringify(merged));
-        annotateReasons();
-        refreshReasonOptions();
-        renderSubs();
-        alert(`Imported ${Object.keys(incoming).length} reasons (merged with existing).`);
-      } catch (err) {
-        alert("Invalid JSON file");
+function bindSyncSetup() {
+  document.getElementById("sync-setup").onclick = () => {
+    const cur = localStorage.getItem(PAT_KEY) || "";
+    const masked = cur ? cur.slice(0, 8) + "…" + cur.slice(-4) : "(not set)";
+    const msg = `GitHub sync setup\n\n` +
+      `Current PAT: ${masked}\n\n` +
+      `To enable writing your reasons to GitHub (so partner sees them):\n` +
+      `1. Go to github.com → Settings → Developer settings → Personal access tokens → Fine-grained tokens\n` +
+      `2. Generate new token, scope to repo "${REPO}"\n` +
+      `3. Permissions: Contents → Read and write\n` +
+      `4. Paste the token below\n\n` +
+      `Leave empty to clear / disable sync.\n` +
+      `Read works without PAT (anyone with dashboard access sees reasons).`;
+    const newPat = prompt(msg, "");
+    if (newPat === null) return; // cancel
+    if (newPat.trim() === "") {
+      localStorage.removeItem(PAT_KEY);
+      setSyncStatus("⊙ Read-only", "muted");
+      return;
+    }
+    localStorage.setItem(PAT_KEY, newPat.trim());
+    setSyncStatus("⟳ Testing...", "busy");
+    fetchReasonFileSha().then(sha => {
+      if (sha) {
+        setSyncStatus("✓ Synced", "ok");
+        // Push current local data to remote immediately
+        pushReasonsToGithub();
+      } else {
+        setSyncStatus("✗ PAT invalid", "err");
       }
-    };
-    reader.readAsText(f);
+    });
   };
 }
 
@@ -1780,10 +1902,12 @@ function initApp() {
   renderPayback();
   bindTabs();
   bindSubsFilters();
-  bindReasonImportExport();
+  bindSyncSetup();
   bindForecast();
   bindPayback();
   initFC2();
+  // Pull latest reasons from GitHub (async, will re-render if changed)
+  initReasonSync();
 }
 
 // ============ Password gate (AES-GCM via Web Crypto) ============
