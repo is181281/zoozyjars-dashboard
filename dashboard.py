@@ -791,13 +791,14 @@ a.email:hover { text-decoration: underline; }
         <th data-key="status">Status</th>
         <th data-key="email">Customer</th>
         <th data-key="lang">Lang</th>
-        <th class="num" data-key="actual_step" title="Total orders including test box (1 = only test box, 2 = test box + 1st renewal, etc.)">Orders</th>
+        <th class="num" data-key="actual_step" title="Total orders including test box. Refund-after-test counts as 1.">Orders</th>
         <th class="num" data-key="n_jars">Jars</th>
         <th class="num" data-key="period_days">Cycle</th>
         <th class="num" data-key="mrr_eur">MRR €</th>
         <th data-key="created">Started</th>
         <th data-key="current_period_end">Next bill</th>
         <th data-key="canceled_at" title="When the cancellation was issued (for canceling/canceled subs)">Canceled</th>
+        <th data-key="refund_after_test" title="Mark when customer was refunded for renewal — sub will count as trial dropout in cohort stats.">Refund</th>
         <th data-key="cancel_reason" title="Free text — type once and it auto-suggests next time. Synced via GitHub.">Cancel reason</th>
       </tr></thead>
       <tbody></tbody>
@@ -1123,29 +1124,67 @@ let reasonFileSha = null;  // GitHub blob SHA, needed for PUT
 let saveDebounce = null;
 
 function loadReasons() {
-  try { return JSON.parse(localStorage.getItem(REASON_KEY) || "{}"); }
-  catch { return {}; }
+  try {
+    const raw = JSON.parse(localStorage.getItem(REASON_KEY) || "{}");
+    // Migrate old format (string values) → new format ({reason: string})
+    const out = {};
+    for (const [k, v] of Object.entries(raw)) {
+      out[k] = (typeof v === "string") ? {reason: v} : (v || {});
+    }
+    return out;
+  } catch { return {}; }
 }
 function setReasons(obj) {
   localStorage.setItem(REASON_KEY, JSON.stringify(obj));
 }
-function saveReason(subId, text) {
+function getAnnotation(subId) {
+  return loadReasons()[subId] || {};
+}
+function setAnnotationField(subId, field, value) {
   const all = loadReasons();
-  if (text && text.trim()) all[subId] = text.trim();
-  else delete all[subId];
+  all[subId] = all[subId] || {};
+  if (value === null || value === false || value === "" || value === undefined) {
+    delete all[subId][field];
+    if (Object.keys(all[subId]).length === 0) delete all[subId];
+  } else {
+    all[subId][field] = value;
+  }
   setReasons(all);
-  refreshReasonOptions();
   scheduleGithubSave();
+}
+function saveReason(subId, text) {
+  setAnnotationField(subId, "reason", text && text.trim() ? text.trim() : null);
+  refreshReasonOptions();
+}
+function saveRefundFlag(subId, flag) {
+  setAnnotationField(subId, "refund", flag ? true : null);
 }
 function refreshReasonOptions() {
   const all = loadReasons();
-  const unique = [...new Set(Object.values(all))].sort();
+  const unique = [...new Set(Object.values(all).map(v => v.reason).filter(Boolean))].sort();
   document.getElementById("reason-options").innerHTML =
     unique.map(v => `<option value="${v.replace(/"/g, '&quot;')}"></option>`).join("");
 }
+// Apply annotations to DATA.subs: set cancel_reason field, and adjust
+// actual_step / status / mrr_eur for refund-after-test subs.
 function annotateReasons() {
   const all = loadReasons();
-  for (const s of DATA.subs) s.cancel_reason = all[s.id] || "";
+  for (const s of DATA.subs) {
+    const ann = all[s.id] || {};
+    s.cancel_reason = ann.reason || "";
+    s.refund_after_test = !!ann.refund;
+    if (s.refund_after_test) {
+      // Statistically: this person didn't really progress past the test box.
+      // Override step to 1 and treat as canceled for funnel/MRR purposes.
+      s._effective_step = 1;
+      s._effective_status = "canceled";
+      s._effective_mrr = 0;
+    } else {
+      s._effective_step = s.actual_step;
+      s._effective_status = s.status;
+      s._effective_mrr = s.mrr_eur;
+    }
+  }
 }
 
 function setSyncStatus(text, color) {
@@ -1247,11 +1286,17 @@ async function initReasonSync() {
   const remote = await fetchReasonsFromGithub();
   if (remote) {
     const local = loadReasons();
-    const merged = {...local, ...remote};
+    // Merge: for each sub, prefer remote fields but keep any local-only fields
+    const merged = {...local};
+    for (const [k, v] of Object.entries(remote)) {
+      const remoteAnn = (typeof v === "string") ? {reason: v} : (v || {});
+      merged[k] = {...(merged[k] || {}), ...remoteAnn};
+    }
     setReasons(merged);
     annotateReasons();
     refreshReasonOptions();
     if (typeof renderSubs === "function") renderSubs();
+    if (typeof recomputeFunnels === "function") recomputeFunnels();
   }
   // 2. If PAT set, mark synced
   if (localStorage.getItem(PAT_KEY)) {
@@ -1305,12 +1350,17 @@ function renderSubs() {
       `<span class="item"><span class="qty">${it.qty}×</span> ${it.product_name}</span>`
     ).join("");
     const phasePill = s.phase === "trial" ? `<span class="pill trial" title="in 9-day trial, no renewal paid yet">trial</span>` : "";
-    const ordersBadge = s.actual_step >= 2
-      ? `<b style="color:#5d6f3d;">${s.actual_step}</b>`
-      : `<span class="muted">${s.actual_step}</span>`;
+    const effStep = s._effective_step ?? s.actual_step;
+    const ordersBadge = s.refund_after_test
+      ? `<span style="text-decoration: line-through; color:#a04540;">${s.actual_step}</span> <b style="color:#5d6f3d;">${effStep}</b>`
+      : (effStep >= 2
+        ? `<b style="color:#5d6f3d;">${effStep}</b>`
+        : `<span class="muted">${effStep}</span>`);
     const reasonVal = (s.cancel_reason || "").replace(/"/g, '&quot;');
+    const refundChecked = s.refund_after_test ? "checked" : "";
+    const rowStyle = s.refund_after_test ? 'style="background:#fcf2f0;"' : "";
     return `
-      <tr class="row" data-id="${s.id}">
+      <tr class="row" data-id="${s.id}" ${rowStyle}>
         <td><span class="pill ${s.status}">${s.status}</span> ${phasePill}</td>
         <td>
           <div>${s.name || "<span class='muted'>—</span>"}</div>
@@ -1324,6 +1374,10 @@ function renderSubs() {
         <td>${fmt.date(s.created)} <span class="muted" style="font-size:11px;">(${fmt.daysAgo(s.created)})</span></td>
         <td>${fmt.date(s.current_period_end)}</td>
         <td>${s.canceled_at ? `<span style="color:#a04540;">${fmt.date(s.canceled_at)}</span> <span class="muted" style="font-size:11px;">(${fmt.daysAgo(s.canceled_at)})</span>` : "<span class='muted'>—</span>"}</td>
+        <td onclick="event.stopPropagation()" style="text-align:center;">
+          <input type="checkbox" data-sub="${s.id}" class="refund-input" ${refundChecked}
+            title="Customer was refunded for renewal — count as trial dropout in stats">
+        </td>
         <td onclick="event.stopPropagation()">
           <input type="text" list="reason-options" data-sub="${s.id}" value="${reasonVal}"
             placeholder="add reason..."
@@ -1331,7 +1385,7 @@ function renderSubs() {
             style="width:160px; padding:4px 8px; border:1px solid #d6d2c5; border-radius:4px; font:inherit; font-size:12px; background:white;">
         </td>
       </tr>
-      <tr class="detail-row" style="display:none;"><td colspan="11" class="detail">
+      <tr class="detail-row" style="display:none;"><td colspan="12" class="detail">
         <div><b>${s.id}</b> · cust ${s.customer_id} · raw_status: <code>${s.raw_status}</code>
           ${s.cancel_at_period_end ? "· cancel_at_period_end" : ""}
           ${s.pause_collection ? `· paused (${s.pause_collection.behavior || ""})` : ""}
@@ -1360,6 +1414,54 @@ function renderSubs() {
       if (sub) sub.cancel_reason = e.target.value;
     };
   });
+  // Bind refund-after-test checkboxes
+  document.querySelectorAll(".refund-input").forEach(inp => {
+    inp.onchange = (e) => {
+      const subId = e.target.dataset.sub;
+      saveRefundFlag(subId, e.target.checked);
+      annotateReasons();   // recompute effective_step on the sub
+      recomputeFunnels();  // update cohort + KPI views
+      renderSubs();        // re-render row to reflect strikethrough
+    };
+  });
+}
+
+// Recompute total funnel + cohort steps using effective values (overrides applied)
+function recomputeFunnels() {
+  function bucketsFor(subsList) {
+    const steps = [];
+    for (let S = 1; S <= 5; S++) {
+      let due = 0, reached = 0, lost = 0, pending = 0;
+      for (const s of subsList) {
+        const aStep = s._effective_step ?? s.actual_step;
+        const status = s._effective_status ?? s.status;
+        if (aStep >= S) reached++;
+        else if (S === 1 || aStep >= S - 1) {
+          if (status === "canceled" || status === "canceling") lost++;
+          else pending++;
+        }
+        if ((s.expected_step ?? 0) >= S) due++;
+      }
+      const decided = reached + lost;
+      const conv = decided > 0 ? Math.round(reached / decided * 1000) / 10 : null;
+      steps.push({step: S, due, reached, lost, pending, conversion: conv});
+    }
+    return steps;
+  }
+  // Total funnel
+  DATA.total_funnel_steps = bucketsFor(DATA.subs);
+  // Per cohort
+  const byCohort = {};
+  for (const s of DATA.subs) {
+    const cohort = new Date(s.created * 1000).toISOString().slice(0, 7);
+    (byCohort[cohort] = byCohort[cohort] || []).push(s);
+  }
+  for (const c of DATA.cohorts) {
+    if (byCohort[c.cohort]) c.steps = bucketsFor(byCohort[c.cohort]);
+  }
+  // Re-render dependent views
+  renderCohorts();
+  renderKPI();
 }
 
 function bindSyncSetup() {
@@ -1898,6 +2000,7 @@ function initApp() {
   populateLangFilter();
   annotateReasons();
   refreshReasonOptions();
+  recomputeFunnels();  // apply any overrides from localStorage to cohort stats
   renderSubs();
   renderForecast();
   renderCohorts();
