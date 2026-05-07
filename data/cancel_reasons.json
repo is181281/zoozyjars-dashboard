@@ -1,8 +1,20 @@
 {
-  "sub_1TPQ3rFTFpBXf4s3JtE3HfOJ": "wrong",
-  "sub_1TOvGKFTFpBXf4s3L0Rk8wvx": "not eating",
-  "sub_1TQ0OAFTFpBXf4s31QjtRXFs": "leaved",
-  "sub_1TOCUnFTFpBXf4s3K7gcmi9Q": "not eating",
-  "sub_1TRD56FTFpBXf4s341a7P79A": "testing",
-  "sub_1TRnSEFTFpBXf4s3mzXnkhti": "not eating"
+  "sub_1TPQ3rFTFpBXf4s3JtE3HfOJ": {
+    "reason": "refund"
+  },
+  "sub_1TOvGKFTFpBXf4s3L0Rk8wvx": {
+    "reason": "not eating"
+  },
+  "sub_1TQ0OAFTFpBXf4s31QjtRXFs": {
+    "reason": "leaved"
+  },
+  "sub_1TOCUnFTFpBXf4s3K7gcmi9Q": {
+    "reason": "not eating"
+  },
+  "sub_1TRD56FTFpBXf4s341a7P79A": {
+    "reason": "testing"
+  },
+  "sub_1TRnSEFTFpBXf4s3mzXnkhti": {
+    "reason": "not eating"
+  }
 }
