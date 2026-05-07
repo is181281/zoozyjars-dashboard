@@ -814,6 +814,17 @@ a.email:hover { text-decoration: underline; }
         <option value="paid">paid</option>
       </select>
       <span class="sep">|</span>
+      <span class="label">Orders</span>
+      <select id="filter-orders-op" style="padding:6px 8px; border:1px solid #d6d2c5; border-radius:6px;">
+        <option value="">any</option>
+        <option value=">=">≥</option>
+        <option value=">">&gt;</option>
+        <option value="=">=</option>
+        <option value="<">&lt;</option>
+        <option value="<=">≤</option>
+      </select>
+      <input type="number" id="filter-orders-val" min="0" step="1" placeholder="N" style="width:60px; padding:6px 8px; border:1px solid #d6d2c5; border-radius:6px;">
+      <span class="sep">|</span>
       <input id="search" placeholder="email, name, sub_id..." style="flex:1; min-width:200px;">
       <span class="muted" id="filter-count" style="font-size:12px;"></span>
       <span id="sync-status" style="font-size:12px; padding:4px 10px; border-radius:6px; background:#f3efe4; color:#8b8775;" title="GitHub sync status">⊙ Local only</span>
@@ -1145,7 +1156,7 @@ function renderSecondaryTables() {
 }
 
 // ============ Subscriptions table ============
-let subsState = {status: "all", lang: "", cycle: "", phase: "", search: "", sortKey: "mrr_eur", sortDir: -1};
+let subsState = {status: "all", lang: "", cycle: "", phase: "", search: "", ordersOp: "", ordersVal: null, sortKey: "mrr_eur", sortDir: -1};
 
 // ----- Cancel-reason store with GitHub sync -----
 const REASON_KEY = "zj_cancel_reasons";
@@ -1437,6 +1448,15 @@ function filterSubs() {
     if (subsState.lang && s.lang !== subsState.lang) return false;
     if (subsState.cycle && String(s.period_days) !== subsState.cycle) return false;
     if (subsState.phase && s.phase !== subsState.phase) return false;
+    if (subsState.ordersOp && subsState.ordersVal != null) {
+      const orders = s._effective_step ?? s.actual_step;
+      const v = subsState.ordersVal;
+      if (subsState.ordersOp === ">=" && !(orders >= v)) return false;
+      if (subsState.ordersOp === ">" && !(orders > v)) return false;
+      if (subsState.ordersOp === "=" && !(orders === v)) return false;
+      if (subsState.ordersOp === "<" && !(orders < v)) return false;
+      if (subsState.ordersOp === "<=" && !(orders <= v)) return false;
+    }
     if (q) {
       const hay = `${s.email||""} ${s.name||""} ${s.id} ${s.customer_id}`.toLowerCase();
       if (!hay.includes(q)) return false;
@@ -1621,6 +1641,12 @@ function bindSubsFilters() {
   document.getElementById("filter-lang").onchange = e => { subsState.lang = e.target.value; renderSubs(); };
   document.getElementById("filter-cycle").onchange = e => { subsState.cycle = e.target.value; renderSubs(); };
   document.getElementById("filter-phase").onchange = e => { subsState.phase = e.target.value; renderSubs(); };
+  document.getElementById("filter-orders-op").onchange = e => { subsState.ordersOp = e.target.value; renderSubs(); };
+  document.getElementById("filter-orders-val").oninput = e => {
+    const v = e.target.value;
+    subsState.ordersVal = v === "" ? null : parseInt(v);
+    renderSubs();
+  };
   document.getElementById("search").oninput = e => { subsState.search = e.target.value; renderSubs(); };
   document.querySelectorAll("#subs-table th").forEach(th => {
     th.onclick = () => {
