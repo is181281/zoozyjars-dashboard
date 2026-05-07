@@ -210,6 +210,32 @@ refunds_all = fetch_all(stripe.Refund.list, created={"gte": REVENUE_FETCH_TS})
 refunds = [r for r in refunds_all if r.status == "succeeded"]
 print(f"   {len(refunds)} successful refunds")
 
+# Try to fetch subscription update events to find when each sub was paused.
+# Requires the Stripe restricted key to have "Events: read" permission.
+# If it doesn't, we fall back to current_period_start as an approximation.
+paused_at_map = {}
+try:
+    print(f"→ subscription events (created >= {CUTOFF_DATE})...", flush=True)
+    sub_events = fetch_all(
+        stripe.Event.list,
+        types=["customer.subscription.updated"],
+        created={"gte": CUTOFF_TS},
+    )
+    print(f"   {len(sub_events)} sub-update events")
+    for ev in sorted(sub_events, key=lambda e: -e.created):
+        obj = ev.data.object
+        prev = _md(_attr(ev.data, "previous_attributes"))
+        sub_id = obj.get("id") if isinstance(obj, dict) else _attr(obj, "id")
+        if not sub_id or sub_id in paused_at_map:
+            continue
+        cur_pause = obj.get("pause_collection") if isinstance(obj, dict) else _attr(obj, "pause_collection")
+        if not cur_pause:
+            continue
+        if "pause_collection" in prev and prev["pause_collection"] is None:
+            paused_at_map[sub_id] = ev.created
+except stripe.error.PermissionError:
+    print("   (no event-read permission — pause date will fall back to current_period_start)")
+
 # ------------------------------------------------------------
 # NORMALIZE SUBSCRIPTIONS
 # ------------------------------------------------------------
@@ -277,6 +303,10 @@ def sub_row(s):
         "canceled_at": _attr(s, "canceled_at"),
         "cancel_at": _attr(s, "cancel_at"),
         "cancel_at_period_end": _attr(s, "cancel_at_period_end") or False,
+        # Exact pause date if we have event-read permission, else fall back to
+        # current_period_start (when sub last billed — pause likely set after that)
+        "paused_at": paused_at_map.get(s.id) or (item_period_start if pause else None),
+        "paused_at_exact": s.id in paused_at_map,
         "pause_collection": pause,
         "mrr_eur": round(mrr_eur, 2),
         "period_days": period_d,
@@ -800,7 +830,7 @@ a.email:hover { text-decoration: underline; }
         <th class="num" data-key="mrr_eur">MRR €</th>
         <th data-key="created">Started</th>
         <th data-key="current_period_end">Next bill</th>
-        <th data-key="canceled_at" title="When the cancellation was issued (for canceling/canceled subs)">Canceled</th>
+        <th data-key="canceled_at" title="When the sub was canceled (canceled/canceling) or paused (paused)">Canceled / Paused</th>
         <th data-key="cancel_reason" title="Free text. Special: type 'refund' (or 'refund: ...') to mark as refund — orders count drops by 1 and sub rolls back one step in cohort stats. Synced via GitHub.">Cancel reason</th>
       </tr></thead>
       <tbody></tbody>
@@ -1459,7 +1489,13 @@ function renderSubs() {
         <td class="num">${fmt.eur2(s.mrr_eur)}</td>
         <td>${fmt.date(s.created)} <span class="muted" style="font-size:11px;">(${fmt.daysAgo(s.created)})</span></td>
         <td>${fmt.date(s.current_period_end)}</td>
-        <td>${s.canceled_at ? `<span style="color:#a04540;">${fmt.date(s.canceled_at)}</span> <span class="muted" style="font-size:11px;">(${fmt.daysAgo(s.canceled_at)})</span>` : "<span class='muted'>—</span>"}</td>
+        <td>${
+          s.status === "paused" && s.paused_at
+            ? `<span style="color:#b58a30;">${fmt.date(s.paused_at)}${s.paused_at_exact ? "" : "~"}</span> <span class="muted" style="font-size:11px;">(paused ${fmt.daysAgo(s.paused_at)}${s.paused_at_exact ? "" : ", approx."})</span>`
+            : s.canceled_at
+              ? `<span style="color:#a04540;">${fmt.date(s.canceled_at)}</span> <span class="muted" style="font-size:11px;">(${fmt.daysAgo(s.canceled_at)})</span>`
+              : "<span class='muted'>—</span>"
+        }</td>
         <td onclick="event.stopPropagation()">
           <input type="text" list="reason-options" data-sub="${s.id}" value="${reasonVal}"
             placeholder="add reason..."
