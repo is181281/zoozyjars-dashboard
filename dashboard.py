@@ -584,6 +584,9 @@ h1 .accent { color: #5d6f3d; }
 .meta { color: #8b8775; font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; }
 .meta .updated { display: inline-block; padding: 4px 10px; border-radius: 12px; background: #e6efdc; color: #4a7c4a; font-weight: 500; font-size: 12px; }
 .meta .updated .age { font-weight: 400; opacity: 0.7; }
+.meta .refresh-btn { margin-left: 6px; padding: 4px 10px; border-radius: 12px; background: white; border: 1px solid #d6d2c5; color: #5d6f3d; font-size: 11px; cursor: pointer; font-weight: 500; }
+.meta .refresh-btn:hover { background: #f3efe4; }
+.meta .refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .container { padding: 20px 28px 60px; max-width: 1500px; margin: 0 auto; }
 
 /* KPI strip */
@@ -1041,8 +1044,10 @@ function renderKPI() {
     hour: "2-digit", minute: "2-digit", timeZone: "Europe/Warsaw"
   });
   document.getElementById("meta").innerHTML =
-    `<div class="updated">⟳ Updated ${genLocal} <span class="age">· ${ageStr}</span></div>` +
+    `<div><span class="updated">⟳ Updated ${genLocal} <span class="age">· ${ageStr}</span></span>` +
+    `<button id="refresh-btn" class="refresh-btn" title="Force a fresh rebuild from Stripe (requires PAT with Actions permission)">↻ Refresh now</button></div>` +
     `<div style="margin-top:6px; font-size:11px;">Data from <b>${DATA.cutoff_date}</b> · ${DATA.subs.length} subs · ${DATA.ltv.length} customers</div>`;
+  document.getElementById("refresh-btn").onclick = triggerRebuild;
   const cards = [
     {cls: "active", label: "Active", value: fmt.num(k.active), delta: `${k.active_paid} paying · ${k.active_trial} in trial`},
     {cls: "paused", label: "Paused", value: fmt.num(k.paused), delta: `${k.paused_paid} paid · ${k.paused_trial} in trial`},
@@ -1283,6 +1288,86 @@ function scheduleGithubSave() {
   saveDebounce = setTimeout(pushReasonsToGithub, 3000);
 }
 
+// ----- Force rebuild (workflow_dispatch) -----
+async function triggerRebuild() {
+  const btn = document.getElementById("refresh-btn");
+  const pat = localStorage.getItem(PAT_KEY);
+  if (!pat) {
+    alert("To force refresh, set up a GitHub PAT first via the ⚙ Sync button on Subscriptions tab.\n\nThe PAT also needs 'Actions: Read and write' permission to trigger rebuilds.");
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = "⟳ Triggering...";
+  try {
+    const r = await fetch(
+      `https://api.github.com/repos/${REPO}/actions/workflows/build.yml/dispatches`,
+      {
+        method: "POST",
+        headers: {Authorization: `token ${pat}`, "Content-Type": "application/json"},
+        body: JSON.stringify({ref: "main"}),
+      }
+    );
+    if (r.status === 204) {
+      btn.textContent = "⟳ Building...";
+      pollRebuildStatus(btn);
+    } else if (r.status === 401 || r.status === 403) {
+      btn.disabled = false;
+      btn.textContent = "↻ Refresh now";
+      alert("PAT lacks 'Actions: Read and write' permission. Edit your token on GitHub and re-paste via Sync button.");
+    } else {
+      btn.disabled = false;
+      btn.textContent = "↻ Refresh now";
+      alert("Failed to trigger rebuild: HTTP " + r.status);
+    }
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = "↻ Refresh now";
+    alert("Network error: " + e.message);
+  }
+}
+
+async function pollRebuildStatus(btn) {
+  const pat = localStorage.getItem(PAT_KEY);
+  const startedAt = Date.now();
+  for (let i = 0; i < 60; i++) {  // up to ~5 min
+    await new Promise(r => setTimeout(r, 5000));
+    try {
+      const r = await fetch(
+        `https://api.github.com/repos/${REPO}/actions/runs?per_page=3`,
+        {headers: {Authorization: `token ${pat}`}}
+      );
+      const data = await r.json();
+      // Find the most recent run that started after we triggered
+      const recent = (data.workflow_runs || [])
+        .filter(w => new Date(w.created_at).getTime() >= startedAt - 30000)
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+      if (recent && recent.status === "completed") {
+        if (recent.conclusion === "success") {
+          btn.textContent = "✓ Done";
+          if (confirm("Rebuild complete. Reload page now to see fresh data?")) {
+            location.reload(true);
+          } else {
+            btn.disabled = false;
+            btn.textContent = "↻ Refresh now";
+          }
+        } else {
+          btn.disabled = false;
+          btn.textContent = "✗ Failed";
+          setTimeout(() => { btn.textContent = "↻ Refresh now"; }, 3000);
+        }
+        return;
+      }
+      const elapsed = Math.round((Date.now() - startedAt) / 1000);
+      btn.textContent = `⟳ Building... ${elapsed}s`;
+    } catch (e) {
+      // ignore polling errors
+    }
+  }
+  btn.disabled = false;
+  btn.textContent = "↻ Refresh now";
+  alert("Build is taking longer than expected. Check Actions tab on GitHub.");
+}
+
 async function initReasonSync() {
   // 1. Pull from GitHub on load and merge with localStorage (GitHub wins on conflict)
   const remote = await fetchReasonsFromGithub();
@@ -1458,10 +1543,12 @@ function bindSyncSetup() {
     const masked = cur ? cur.slice(0, 8) + "…" + cur.slice(-4) : "(not set)";
     const msg = `GitHub sync setup\n\n` +
       `Current PAT: ${masked}\n\n` +
-      `To enable writing your reasons to GitHub (so partner sees them):\n` +
+      `To enable writing your reasons + force-refresh button:\n` +
       `1. Go to github.com → Settings → Developer settings → Personal access tokens → Fine-grained tokens\n` +
       `2. Generate new token, scope to repo "${REPO}"\n` +
-      `3. Permissions: Contents → Read and write\n` +
+      `3. Permissions:\n` +
+      `   • Contents → Read and write (for cancel reasons)\n` +
+      `   • Actions → Read and write (for force refresh)\n` +
       `4. Paste the token below\n\n` +
       `Leave empty to clear / disable sync.\n` +
       `Read works without PAT (anyone with dashboard access sees reasons).`;
