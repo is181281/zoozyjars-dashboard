@@ -798,8 +798,7 @@ a.email:hover { text-decoration: underline; }
         <th data-key="created">Started</th>
         <th data-key="current_period_end">Next bill</th>
         <th data-key="canceled_at" title="When the cancellation was issued (for canceling/canceled subs)">Canceled</th>
-        <th data-key="refund_after_test" title="Mark when customer was refunded for renewal — sub will count as trial dropout in cohort stats.">Refund</th>
-        <th data-key="cancel_reason" title="Free text — type once and it auto-suggests next time. Synced via GitHub.">Cancel reason</th>
+        <th data-key="cancel_reason" title="Free text. Special: type 'refund' (or 'refund: ...') to mark as refund — orders count drops by 1 and sub rolls back one step in cohort stats. Synced via GitHub.">Cancel reason</th>
       </tr></thead>
       <tbody></tbody>
     </table>
@@ -1165,19 +1164,22 @@ function refreshReasonOptions() {
   document.getElementById("reason-options").innerHTML =
     unique.map(v => `<option value="${v.replace(/"/g, '&quot;')}"></option>`).join("");
 }
-// Apply annotations to DATA.subs: set cancel_reason field, and adjust
-// actual_step / status / mrr_eur for refund-after-test subs.
+// Apply annotations to DATA.subs.
+// Special: if cancel_reason starts with "refund" (case-insensitive), the sub
+// is statistically treated as having one fewer order → rolls back one cohort
+// step and contributes 0 to MRR (because that order's money was returned).
+function isRefundReason(text) {
+  return !!(text && /^\s*refund\b/i.test(text));
+}
 function annotateReasons() {
   const all = loadReasons();
   for (const s of DATA.subs) {
     const ann = all[s.id] || {};
     s.cancel_reason = ann.reason || "";
-    s.refund_after_test = !!ann.refund;
+    s.refund_after_test = isRefundReason(s.cancel_reason);
     if (s.refund_after_test) {
-      // Statistically: this person didn't really progress past the test box.
-      // Override step to 1 and treat as canceled for funnel/MRR purposes.
-      s._effective_step = 1;
-      s._effective_status = "canceled";
+      s._effective_step = Math.max(1, s.actual_step - 1);
+      s._effective_status = s.status;
       s._effective_mrr = 0;
     } else {
       s._effective_step = s.actual_step;
@@ -1357,7 +1359,6 @@ function renderSubs() {
         ? `<b style="color:#5d6f3d;">${effStep}</b>`
         : `<span class="muted">${effStep}</span>`);
     const reasonVal = (s.cancel_reason || "").replace(/"/g, '&quot;');
-    const refundChecked = s.refund_after_test ? "checked" : "";
     const rowStyle = s.refund_after_test ? 'style="background:#fcf2f0;"' : "";
     return `
       <tr class="row" data-id="${s.id}" ${rowStyle}>
@@ -1374,10 +1375,6 @@ function renderSubs() {
         <td>${fmt.date(s.created)} <span class="muted" style="font-size:11px;">(${fmt.daysAgo(s.created)})</span></td>
         <td>${fmt.date(s.current_period_end)}</td>
         <td>${s.canceled_at ? `<span style="color:#a04540;">${fmt.date(s.canceled_at)}</span> <span class="muted" style="font-size:11px;">(${fmt.daysAgo(s.canceled_at)})</span>` : "<span class='muted'>—</span>"}</td>
-        <td onclick="event.stopPropagation()" style="text-align:center;">
-          <input type="checkbox" data-sub="${s.id}" class="refund-input" ${refundChecked}
-            title="Customer was refunded for renewal — count as trial dropout in stats">
-        </td>
         <td onclick="event.stopPropagation()">
           <input type="text" list="reason-options" data-sub="${s.id}" value="${reasonVal}"
             placeholder="add reason..."
@@ -1385,7 +1382,7 @@ function renderSubs() {
             style="width:160px; padding:4px 8px; border:1px solid #d6d2c5; border-radius:4px; font:inherit; font-size:12px; background:white;">
         </td>
       </tr>
-      <tr class="detail-row" style="display:none;"><td colspan="12" class="detail">
+      <tr class="detail-row" style="display:none;"><td colspan="11" class="detail">
         <div><b>${s.id}</b> · cust ${s.customer_id} · raw_status: <code>${s.raw_status}</code>
           ${s.cancel_at_period_end ? "· cancel_at_period_end" : ""}
           ${s.pause_collection ? `· paused (${s.pause_collection.behavior || ""})` : ""}
@@ -1405,23 +1402,14 @@ function renderSubs() {
       }
     };
   });
-  // Bind cancel-reason inputs
+  // Bind cancel-reason inputs (any change recomputes funnels in case it's a refund reason)
   document.querySelectorAll(".reason-input").forEach(inp => {
     inp.onchange = (e) => {
       const subId = e.target.dataset.sub;
       saveReason(subId, e.target.value);
-      const sub = DATA.subs.find(s => s.id === subId);
-      if (sub) sub.cancel_reason = e.target.value;
-    };
-  });
-  // Bind refund-after-test checkboxes
-  document.querySelectorAll(".refund-input").forEach(inp => {
-    inp.onchange = (e) => {
-      const subId = e.target.dataset.sub;
-      saveRefundFlag(subId, e.target.checked);
-      annotateReasons();   // recompute effective_step on the sub
-      recomputeFunnels();  // update cohort + KPI views
-      renderSubs();        // re-render row to reflect strikethrough
+      annotateReasons();
+      recomputeFunnels();
+      renderSubs();
     };
   });
 }
