@@ -120,6 +120,13 @@ def normalize_status(s):
         return "incomplete"
     return status
 
+def _attr(obj, name, default=None):
+    """Safe attribute access on StripeObject."""
+    try:
+        return getattr(obj, name)
+    except AttributeError:
+        return default
+
 def _md(md_obj):
     """Convert Stripe metadata object to plain dict safely."""
     if not md_obj:
@@ -239,13 +246,6 @@ except stripe.error.PermissionError:
 # ------------------------------------------------------------
 # NORMALIZE SUBSCRIPTIONS
 # ------------------------------------------------------------
-def _attr(obj, name, default=None):
-    """Safe attribute access on StripeObject."""
-    try:
-        return getattr(obj, name)
-    except AttributeError:
-        return default
-
 def sub_row(s):
     cust = s.customer if not isinstance(s.customer, str) else None
     items = []
