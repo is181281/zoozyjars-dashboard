@@ -841,7 +841,7 @@ a.email:hover { text-decoration: underline; }
         <th class="num" data-key="mrr_eur">MRR €</th>
         <th data-key="created">Started</th>
         <th data-key="current_period_end">Next bill</th>
-        <th data-key="canceled_at" title="When the sub was canceled (canceled/canceling) or paused (paused)">Canceled / Paused</th>
+        <th data-key="status_change_at" title="When the sub was canceled (canceled/canceling) or paused (paused)">Canceled / Paused</th>
         <th data-key="cancel_reason" title="Free text. Special: type 'refund' (or 'refund: ...') to mark as refund — orders count drops by 1 and sub rolls back one step in cohort stats. Synced via GitHub.">Cancel reason</th>
       </tr></thead>
       <tbody></tbody>
@@ -1232,6 +1232,9 @@ function annotateReasons() {
       s._effective_status = s.status;
       s._effective_mrr = s.mrr_eur;
     }
+    // Unified sort key for the Canceled / Paused column:
+    // pause date for paused subs, cancel date otherwise.
+    s.status_change_at = s.status === "paused" ? (s.paused_at || null) : (s.canceled_at || null);
   }
 }
 
