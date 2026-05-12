@@ -186,6 +186,60 @@ subs = [
 n_excluded = len(subs_all) - len(subs)
 print(f"   {len(subs)} subscriptions (excluded {n_excluded} of {len(subs_all)})")
 
+# Load cancel_reasons.json (committed by frontend auto-save) so we can apply
+# "error + replacement" exclusion: a sub canceled with reason='Error' AND
+# the same customer has a newer non-canceled sub → drop the canceled one
+# from analytics entirely (it was a mistake, not real churn).
+REASONS_FILE = Path(__file__).parent / "data" / "cancel_reasons.json"
+cancel_reasons_data = {}
+if REASONS_FILE.exists():
+    try:
+        cancel_reasons_data = json.loads(REASONS_FILE.read_text())
+    except Exception as e:
+        print(f"   (warning: could not parse {REASONS_FILE}: {e})")
+
+def _reason_text(entry):
+    if not entry: return ""
+    if isinstance(entry, str): return entry
+    if isinstance(entry, dict): return str(entry.get("reason", ""))
+    return ""
+
+def _is_error_reason(text):
+    return bool(text) and text.strip().lower().startswith("error")
+
+# Build map: customer_email → latest non-canceled sub created_at
+def _cust_email_lower(s):
+    cust = s.customer if not isinstance(s.customer, str) else None
+    e = (_attr(cust, "email") if cust else None) or ""
+    return e.lower()
+
+latest_alive_by_email = {}
+for s in subs:
+    status = normalize_status(s)
+    if status in ("canceled", "canceling"):
+        continue
+    email = _cust_email_lower(s)
+    if not email:
+        continue
+    prev = latest_alive_by_email.get(email)
+    if not prev or s.created > prev.created:
+        latest_alive_by_email[email] = s
+
+def _is_error_replaced(s):
+    reason = _reason_text(cancel_reasons_data.get(s.id))
+    if not _is_error_reason(reason):
+        return False
+    email = _cust_email_lower(s)
+    if not email:
+        return False
+    newer = latest_alive_by_email.get(email)
+    return newer is not None and newer.created > s.created and newer.id != s.id
+
+error_replaced_ids = {s.id for s in subs if _is_error_replaced(s)}
+if error_replaced_ids:
+    print(f"   excluding {len(error_replaced_ids)} 'error+replacement' sub(s) from analytics")
+    subs = [s for s in subs if s.id not in error_replaced_ids]
+
 print(f"→ paid invoices (created >= {CUTOFF_DATE})...", flush=True)
 invoices_all = fetch_all(stripe.Invoice.list, status="paid", created={"gte": CUTOFF_TS})
 invoices = [
