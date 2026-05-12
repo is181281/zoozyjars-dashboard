@@ -901,6 +901,7 @@ a.email:hover { text-decoration: underline; }
       <input type="number" id="filter-orders-val" min="0" step="1" placeholder="N" style="width:60px; padding:6px 8px; border:1px solid #d6d2c5; border-radius:6px;">
       <span class="sep">|</span>
       <input id="search" placeholder="email, name, sub_id..." style="flex:1; min-width:200px;">
+      <span id="cohort-badge" style="display:none; padding:4px 10px; border-radius:12px; background:#e6efdc; color:#4a7c4a; font-size:12px; font-weight:500;"></span>
       <span class="muted" id="filter-count" style="font-size:12px;"></span>
       <span id="sync-status" style="font-size:12px; padding:4px 10px; border-radius:6px; background:#f3efe4; color:#8b8775;" title="GitHub sync status">⊙ Local only</span>
       <button id="sync-setup" style="padding:4px 10px; border:1px solid #d6d2c5; border-radius:6px; background:white; cursor:pointer; font-size:12px;">⚙ Sync</button>
@@ -1231,7 +1232,11 @@ function renderSecondaryTables() {
 }
 
 // ============ Subscriptions table ============
-let subsState = {status: "all", lang: "", cycle: "", phase: "", search: "", ordersOp: "", ordersVal: null, sortKey: "mrr_eur", sortDir: -1};
+let subsState = {status: "all", lang: "", cycle: "", phase: "", search: "", ordersOp: "", ordersVal: null, cohort: "", sortKey: "mrr_eur", sortDir: -1};
+
+function subCohortKey(s) {
+  return new Date(s.created * 1000).toISOString().slice(0, 7); // YYYY-MM
+}
 
 // ----- Cancel-reason store with GitHub sync -----
 const REASON_KEY = "zj_cancel_reasons";
@@ -1529,6 +1534,7 @@ function filterSubs() {
     if (subsState.lang && s.lang !== subsState.lang) return false;
     if (subsState.cycle && String(s.period_days) !== subsState.cycle) return false;
     if (subsState.phase && s.phase !== subsState.phase) return false;
+    if (subsState.cohort && subCohortKey(s) !== subsState.cohort) return false;
     if (subsState.ordersOp && subsState.ordersVal != null) {
       const orders = s._effective_step ?? s.actual_step;
       const v = subsState.ordersVal;
@@ -1554,6 +1560,19 @@ function renderSubs() {
     return (av < bv ? -1 : av > bv ? 1 : 0) * subsState.sortDir;
   });
   document.getElementById("filter-count").textContent = `${rows.length} / ${DATA.subs.length}`;
+  // Cohort filter badge
+  const badge = document.getElementById("cohort-badge");
+  if (subsState.cohort) {
+    badge.style.display = "inline-block";
+    badge.innerHTML = `cohort ${subsState.cohort} <span style="cursor:pointer; margin-left:6px; opacity:0.6;" id="cohort-badge-clear">✕</span>`;
+    document.getElementById("cohort-badge-clear").onclick = (e) => {
+      e.stopPropagation();
+      subsState.cohort = "";
+      renderSubs();
+    };
+  } else {
+    badge.style.display = "none";
+  }
   document.querySelectorAll("#subs-table th").forEach(th => {
     th.classList.remove("sorted", "asc");
     if (th.dataset.key === subsState.sortKey) {
@@ -1909,8 +1928,8 @@ function renderCohorts() {
         <span class="hb" style="${heatColor(conv)}">${st.reached}/${decided} · ${conv.toFixed(0)}%</span>${pendingTxt}
       </td>`;
     }).join("");
-    return `<tr>
-       <td><b>${c.cohort}</b></td>
+    return `<tr class="cohort-row" data-cohort="${c.cohort}" style="cursor:pointer;" title="Click to filter Subscriptions tab by this cohort">
+       <td><b>${c.cohort}</b> <span style="color:#8b8775; font-size:11px;">›</span></td>
        <td class="num">${c.size}</td>
        <td class="num" style="color:#a04540;">${lostCount || "—"}</td>
        ${cells}
@@ -1918,6 +1937,28 @@ function renderCohorts() {
        <td class="num">${fmt.eur2(c.rev_per_sub)}</td>
      </tr>`;
   }).join("");
+
+  // Bind clicks: cohort row → filter Subscriptions tab and switch to it
+  document.querySelectorAll(".cohort-row").forEach(row => {
+    row.onclick = () => {
+      const cohort = row.dataset.cohort;
+      subsState.cohort = cohort;
+      // reset other filters that may obscure the view
+      subsState.status = "all";
+      document.querySelectorAll(".filter-pill[data-status]").forEach(p => {
+        p.classList.toggle("on", p.dataset.status === "all");
+      });
+      // Switch to Subscriptions tab
+      document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+      document.querySelectorAll(".panel").forEach(x => x.classList.remove("active"));
+      const subTab = document.querySelector('.tab[data-panel="subs"]');
+      if (subTab) subTab.classList.add("active");
+      document.getElementById("panel-subs").classList.add("active");
+      renderSubs();
+      // Scroll to top of subs panel
+      window.scrollTo({top: document.getElementById("panel-subs").offsetTop - 20, behavior: "smooth"});
+    };
+  });
 }
 
 // ============ Payback ============
