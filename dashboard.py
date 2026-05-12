@@ -236,6 +236,15 @@ def _is_error_replaced(s):
     return newer is not None and newer.created > s.created and newer.id != s.id
 
 error_replaced_ids = {s.id for s in subs if _is_error_replaced(s)}
+# Map successor_sub_id → predecessor sub objects, so we can transfer their order
+# counts onto the successor (the customer really did receive those boxes).
+predecessor_subs_for_successor = {}  # successor_id → list of excluded predecessor sub objects
+for s in subs:
+    if s.id not in error_replaced_ids:
+        continue
+    successor = latest_alive_by_email.get(_cust_email_lower(s))
+    if successor:
+        predecessor_subs_for_successor.setdefault(successor.id, []).append(s)
 if error_replaced_ids:
     print(f"   excluding {len(error_replaced_ids)} 'error+replacement' sub(s) from analytics")
     subs = [s for s in subs if s.id not in error_replaced_ids]
@@ -418,6 +427,18 @@ for s in sub_rows:
     s["age_days"] = round(age, 1)
     s["actual_step"] = 1 + renewals_per_sub.get(s["id"], 0)
     s["expected_step"] = compute_expected_step(age, s["period_days"] or 28)
+
+    # If this sub is a successor of error-replaced predecessors, the customer
+    # actually received those boxes too. Carry them into a customer-level order
+    # count for display in the Orders column. Cohort math stays on actual_step
+    # (subscription-internal) — display uses display_orders.
+    predecessors = predecessor_subs_for_successor.get(s["id"], [])
+    extra_orders = 0
+    for pred in predecessors:
+        # 1 (test box) + N (renewals on predecessor)
+        extra_orders += 1 + renewals_per_sub.get(pred.id, 0)
+    s["predecessor_orders"] = extra_orders
+    s["display_orders"] = s["actual_step"] + extra_orders
 
 # Per-customer order history (kept for payback analysis — tracks ALL paid invoices)
 by_customer = defaultdict(list)
@@ -1277,12 +1298,15 @@ function annotateReasons() {
     const ann = all[s.id] || {};
     s.cancel_reason = ann.reason || "";
     s.refund_after_test = isRefundReason(s.cancel_reason);
+    // display_orders comes from Python (includes predecessor's boxes for
+    // error+replacement successors). Fall back to actual_step.
+    const base = (s.display_orders != null ? s.display_orders : s.actual_step);
     if (s.refund_after_test) {
-      s._effective_step = Math.max(1, s.actual_step - 1);
+      s._effective_step = Math.max(1, base - 1);
       s._effective_status = s.status;
       s._effective_mrr = 0;
     } else {
-      s._effective_step = s.actual_step;
+      s._effective_step = base;
       s._effective_status = s.status;
       s._effective_mrr = s.mrr_eur;
     }
