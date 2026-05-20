@@ -5,6 +5,8 @@ on:
     # Every 2 hours, on the hour. Adjust as needed.
     - cron: "0 */2 * * *"
   workflow_dispatch:  # allow manual run from Actions tab
+  repository_dispatch:
+    types: [rebuild]
   push:
     branches: [main]
     paths:  # only rebuild on code changes; data/** updates from frontend skipped
@@ -40,6 +42,7 @@ jobs:
         env:
           STRIPE_API_KEY: ${{ secrets.STRIPE_API_KEY }}
           DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+          GH_DASHBOARD_PAT: ${{ secrets.GH_DASHBOARD_PAT }}
         run: python dashboard.py
 
       - name: Upload Pages artifact

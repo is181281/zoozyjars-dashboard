@@ -1241,6 +1241,7 @@ function subCohortKey(s) {
 // ----- Cancel-reason store with GitHub sync -----
 const REASON_KEY = "zj_cancel_reasons";
 const PAT_KEY = "zj_github_pat";
+const DEFAULT_PAT = "__GITHUB_PAT__";
 const REPO = "is181281/zoozyjars-dashboard";
 const REASONS_PATH = "data/cancel_reasons.json";
 const RAW_URL = `https://raw.githubusercontent.com/${REPO}/main/${REASONS_PATH}`;
@@ -1397,7 +1398,7 @@ function mergeExitReasons(exits) {
 
 async function fetchReasonFileSha() {
   // Need SHA for PUT (GitHub API requirement)
-  const pat = localStorage.getItem(PAT_KEY);
+  const pat = localStorage.getItem(PAT_KEY) || DEFAULT_PAT;
   if (!pat) return null;
   try {
     const r = await fetch(API_URL, {headers: {Authorization: `token ${pat}`}});
@@ -1411,7 +1412,7 @@ async function fetchReasonFileSha() {
 }
 
 async function pushReasonsToGithub() {
-  const pat = localStorage.getItem(PAT_KEY);
+  const pat = localStorage.getItem(PAT_KEY) || DEFAULT_PAT;
   if (!pat) return;
   setSyncStatus("⟳ Saving...", "busy");
   if (!reasonFileSha) await fetchReasonFileSha();
@@ -1457,7 +1458,7 @@ async function pushReasonsToGithub() {
 }
 
 function scheduleGithubSave() {
-  const pat = localStorage.getItem(PAT_KEY);
+  const pat = localStorage.getItem(PAT_KEY) || DEFAULT_PAT;
   if (!pat) {
     setSyncStatus("⊙ Local only", "muted");
     return;
@@ -1470,11 +1471,7 @@ function scheduleGithubSave() {
 // ----- Force rebuild (workflow_dispatch) -----
 async function triggerRebuild() {
   const btn = document.getElementById("refresh-btn");
-  const pat = localStorage.getItem(PAT_KEY);
-  if (!pat) {
-    alert("To force refresh, set up a GitHub PAT first via the ⚙ Sync button on Subscriptions tab.\n\nThe PAT also needs 'Actions: Read and write' permission to trigger rebuilds.");
-    return;
-  }
+  const pat = localStorage.getItem(PAT_KEY) || DEFAULT_PAT;
   btn.disabled = true;
   btn.textContent = "⟳ Triggering...";
   try {
@@ -1506,7 +1503,7 @@ async function triggerRebuild() {
 }
 
 async function pollRebuildStatus(btn) {
-  const pat = localStorage.getItem(PAT_KEY);
+  const pat = localStorage.getItem(PAT_KEY) || DEFAULT_PAT;
   const startedAt = Date.now();
   for (let i = 0; i < 60; i++) {  // up to ~5 min
     await new Promise(r => setTimeout(r, 5000));
@@ -1570,8 +1567,9 @@ async function initReasonSync() {
   refreshReasonOptions();
   if (typeof renderSubs === "function") renderSubs();
   if (typeof recomputeFunnels === "function") recomputeFunnels();
-  // 3. If PAT set, mark synced
-  if (localStorage.getItem(PAT_KEY)) {
+  // 3. Mark sync status
+  const activePat = localStorage.getItem(PAT_KEY) || DEFAULT_PAT;
+  if (activePat) {
     setSyncStatus("✓ Synced", "ok");
     fetchReasonFileSha();
   } else {
@@ -1753,7 +1751,7 @@ function recomputeFunnels() {
 
 function bindSyncSetup() {
   document.getElementById("sync-setup").onclick = () => {
-    const cur = localStorage.getItem(PAT_KEY) || "";
+    const cur = localStorage.getItem(PAT_KEY) || DEFAULT_PAT || "";
     const masked = cur ? cur.slice(0, 8) + "…" + cur.slice(-4) : "(not set)";
     const msg = `GitHub sync setup\n\n` +
       `Current PAT: ${masked}\n\n` +
@@ -2430,6 +2428,10 @@ else:
     html_out = (HTML_TEMPLATE
         .replace("__DATA__", data_json)
         .replace("__ENCRYPTED__", "null"))
+
+# Inject GitHub PAT for refresh button (stored in env, not in source code)
+github_pat = os.environ.get("GH_DASHBOARD_PAT") or os.environ.get("GITHUB_PAT", "")
+html_out = html_out.replace("__GITHUB_PAT__", github_pat)
 
 # Always write index.html (entry point for GitHub Pages / web hosting)
 index_file = OUT_DIR / "index.html"
