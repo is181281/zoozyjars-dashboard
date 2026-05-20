@@ -1343,6 +1343,58 @@ async function fetchReasonsFromGithub() {
   }
 }
 
+// ----- Lovable subscription_exits (structured exit reasons from cancel/pause flow) -----
+const EXIT_REASON_LABELS = {
+  not_eating: "Nie je (not eating)",
+  want_to_test_first: "Chce przetestować (test first)",
+  didnt_realize_subscription: "Nie wiedział o subskrypcji",
+  too_expensive: "Za drogo",
+  dog_health_issues: "Problemy zdrowotne psa",
+  switching_food: "Zmiana karmy",
+  other: "Inne",
+};
+const LOVABLE_ANALYTICS_URL = "https://hpijmlgxtqwecnvvjyhs.supabase.co/functions/v1/get-analytics-data";
+const LOVABLE_ANALYTICS_KEY = "my-analytics-secret-2026-xyz159";
+
+async function fetchSubscriptionExits() {
+  try {
+    const r = await fetch(LOVABLE_ANALYTICS_URL + "?table=subscription_exits&limit=1000", {
+      headers: {"x-analytics-key": LOVABLE_ANALYTICS_KEY}
+    });
+    if (!r.ok) return [];
+    const j = await r.json();
+    return j.data || [];
+  } catch (e) {
+    console.warn("Failed to fetch subscription_exits:", e);
+    return [];
+  }
+}
+
+function mergeExitReasons(exits) {
+  // Build map: subscription_id → reason label (from Lovable exit survey)
+  // These serve as auto-populated defaults; manual reasons in localStorage take precedence.
+  const all = loadReasons();
+  let added = 0;
+  for (const exit of exits) {
+    const subId = exit.subscription_id;
+    if (!subId) continue;
+    const label = EXIT_REASON_LABELS[exit.reason_code] || exit.reason_code || "";
+    if (!label) continue;
+    // Only set if no manual reason exists yet
+    if (!all[subId] || !all[subId].reason) {
+      all[subId] = all[subId] || {};
+      all[subId].reason = label;
+      all[subId].source = "lovable";
+      added++;
+    }
+  }
+  if (added > 0) {
+    setReasons(all);
+    console.log(`Merged ${added} exit reasons from Lovable`);
+  }
+  return added;
+}
+
 async function fetchReasonFileSha() {
   // Need SHA for PUT (GitHub API requirement)
   const pat = localStorage.getItem(PAT_KEY);
@@ -1496,6 +1548,11 @@ async function pollRebuildStatus(btn) {
 }
 
 async function initReasonSync() {
+  // 0. Pull structured exit reasons from Lovable (auto-populated baseline)
+  const exits = await fetchSubscriptionExits();
+  if (exits.length > 0) {
+    mergeExitReasons(exits);
+  }
   // 1. Pull from GitHub on load and merge with localStorage (GitHub wins on conflict)
   const remote = await fetchReasonsFromGithub();
   if (remote) {
@@ -1507,12 +1564,13 @@ async function initReasonSync() {
       merged[k] = {...(merged[k] || {}), ...remoteAnn};
     }
     setReasons(merged);
-    annotateReasons();
-    refreshReasonOptions();
-    if (typeof renderSubs === "function") renderSubs();
-    if (typeof recomputeFunnels === "function") recomputeFunnels();
   }
-  // 2. If PAT set, mark synced
+  // 2. Re-apply all reasons to DATA.subs and re-render
+  annotateReasons();
+  refreshReasonOptions();
+  if (typeof renderSubs === "function") renderSubs();
+  if (typeof recomputeFunnels === "function") recomputeFunnels();
+  // 3. If PAT set, mark synced
   if (localStorage.getItem(PAT_KEY)) {
     setSyncStatus("✓ Synced", "ok");
     fetchReasonFileSha();
