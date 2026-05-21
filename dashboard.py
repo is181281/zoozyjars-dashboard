@@ -10,6 +10,8 @@ from pathlib import Path
 from collections import defaultdict, Counter
 
 import stripe
+import urllib.request
+import urllib.parse
 
 # ------------------------------------------------------------
 # CONFIG
@@ -280,6 +282,45 @@ refunds_all = fetch_all(stripe.Refund.list, created={"gte": REVENUE_FETCH_TS})
 refunds = [r for r in refunds_all if r.status == "succeeded"]
 print(f"   {len(refunds)} successful refunds")
 
+# ------------------------------------------------------------
+# FACEBOOK ADS SPEND (for CAC per cohort)
+# ------------------------------------------------------------
+fb_spend_by_month = {}  # "2026-04" → spend in EUR
+fb_token = os.environ.get("FB_ACCESS_TOKEN", "")
+fb_ad_account = os.environ.get("FB_AD_ACCOUNT_ID", "")
+if fb_token and fb_ad_account:
+    print("→ Facebook Ads spend...", flush=True)
+    try:
+        params = urllib.parse.urlencode({
+            "access_token": fb_token,
+            "time_range": json.dumps({
+                "since": CUTOFF_DATE,
+                "until": dt.date.today().isoformat(),
+            }),
+            "time_increment": "monthly",
+            "fields": "spend,date_start",
+            "level": "account",
+            "limit": "100",
+        })
+        url = f"https://graph.facebook.com/v21.0/{fb_ad_account}/insights?{params}"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            fb_data = json.loads(resp.read())
+        for row in fb_data.get("data", []):
+            # date_start is "YYYY-MM-DD", extract month
+            month = row["date_start"][:7]
+            spend_eur = float(row.get("spend", 0))
+            # FB reports in account currency (PLN for this account)
+            spend_eur *= FX_TO_EUR.get("pln", 0.235)
+            fb_spend_by_month[month] = fb_spend_by_month.get(month, 0) + spend_eur
+        print(f"   {len(fb_spend_by_month)} months of ad spend data")
+        for m in sorted(fb_spend_by_month):
+            print(f"     {m}: €{fb_spend_by_month[m]:.0f}")
+    except Exception as e:
+        print(f"   (warning: could not fetch FB ads spend: {e})")
+else:
+    print("   (FB_ACCESS_TOKEN or FB_AD_ACCOUNT_ID not set — skipping ad spend)")
+
 # Try to fetch subscription update events to find when each sub was paused.
 # Requires the Stripe restricted key to have "Events: read" permission.
 # If it doesn't, we fall back to current_period_start as an approximation.
@@ -523,16 +564,44 @@ for r in refunds:
     month = month_warsaw(r.created)
     revenue_by_calendar_month[month] -= to_eur(r.amount, r.currency)
 
+# LTV per cohort: map customer_id → cohort month, then sum payments
+customer_cohort = {}  # customer_id → "YYYY-MM"
+for s in sub_rows:
+    cid = s["customer_id"]
+    cohort = dt.datetime.utcfromtimestamp(s["created"]).strftime("%Y-%m")
+    # Use earliest sub for customer's cohort
+    if cid not in customer_cohort or cohort < customer_cohort[cid]:
+        customer_cohort[cid] = cohort
+
+ltv_by_cohort = defaultdict(float)  # "YYYY-MM" → total LTV EUR
+for cid, orders in by_customer.items():
+    cohort = customer_cohort.get(cid)
+    if not cohort:
+        continue
+    for o in orders:
+        ltv_by_cohort[cohort] += o["amount_eur"]
+
 cohort_table = []
 for k in sorted(subs_by_cohort.keys()):
     cs = subs_by_cohort[k]
     revenue = revenue_by_calendar_month.get(k, 0.0)
+    ad_spend = round(fb_spend_by_month.get(k, 0), 0)
+    cohort_ltv = round(ltv_by_cohort.get(k, 0), 0)
+    size = len(cs)
+    cac = round(ad_spend / size, 2) if size and ad_spend else 0
+    avg_ltv = round(cohort_ltv / size, 2) if size else 0
+    ltv_cac = round(avg_ltv / cac, 2) if cac > 0 else 0
     cohort_table.append({
         "cohort": k,
-        "size": len(cs),
+        "size": size,
         "steps": funnel_for(cs),
         "revenue_eur": round(revenue, 0),
-        "rev_per_sub": round(revenue / len(cs), 2) if cs else 0,
+        "rev_per_sub": round(revenue / size, 2) if cs else 0,
+        "ad_spend_eur": ad_spend,
+        "cac_eur": cac,
+        "cohort_ltv_eur": cohort_ltv,
+        "avg_ltv_eur": avg_ltv,
+        "ltv_cac": ltv_cac,
     })
 
 # ------------------------------------------------------------
@@ -1002,8 +1071,12 @@ a.email:hover { text-decoration: underline; }
           <th class="num">3rd (2nd renewal)</th>
           <th class="num">4th</th>
           <th class="num">5+</th>
-          <th class="num" title="All renewal revenue billed during this calendar month, regardless of which cohort the subscription belongs to.">Revenue € (this month)</th>
+          <th class="num" title="All renewal revenue billed during this calendar month, regardless of which cohort the subscription belongs to.">Revenue €</th>
           <th class="num" title="Revenue this month / cohort size">€/sub</th>
+          <th class="num" title="Facebook Ads spend in this month (EUR)">Ad Spend €</th>
+          <th class="num" title="Cost per acquisition = Ad Spend / Cohort Size">CAC €</th>
+          <th class="num" title="Average lifetime value per customer in this cohort">Avg LTV €</th>
+          <th class="num" title="Lifetime Value / Customer Acquisition Cost">LTV/CAC</th>
         </tr></thead>
         <tbody id="cohort-table"></tbody>
       </table>
@@ -1984,6 +2057,7 @@ function renderCohorts() {
         <span class="hb" style="${heatColor(conv)}">${st.reached}/${decided} · ${conv.toFixed(0)}%</span>${pendingTxt}
       </td>`;
     }).join("");
+    const ltvCacColor = c.ltv_cac >= 3 ? "#5d8a3d" : c.ltv_cac >= 1 ? "#b58a30" : c.ltv_cac > 0 ? "#a04540" : "#8b8775";
     return `<tr class="cohort-row" data-cohort="${c.cohort}" style="cursor:pointer;" title="Click to filter Subscriptions tab by this cohort">
        <td><b>${c.cohort}</b> <span style="color:#8b8775; font-size:11px;">›</span></td>
        <td class="num">${c.size}</td>
@@ -1991,6 +2065,10 @@ function renderCohorts() {
        ${cells}
        <td class="num">${fmt.eur(c.revenue_eur)}</td>
        <td class="num">${fmt.eur2(c.rev_per_sub)}</td>
+       <td class="num">${c.ad_spend_eur ? fmt.eur(c.ad_spend_eur) : '<span class="muted">—</span>'}</td>
+       <td class="num">${c.cac_eur ? fmt.eur2(c.cac_eur) : '<span class="muted">—</span>'}</td>
+       <td class="num">${c.avg_ltv_eur ? fmt.eur2(c.avg_ltv_eur) : '<span class="muted">—</span>'}</td>
+       <td class="num" style="color:${ltvCacColor}; font-weight:600;">${c.ltv_cac ? c.ltv_cac.toFixed(2) + 'x' : '<span class="muted" style="font-weight:normal;">—</span>'}</td>
      </tr>`;
   }).join("");
 
