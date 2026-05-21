@@ -291,24 +291,28 @@ fb_ad_account = os.environ.get("FB_AD_ACCOUNT_ID", "")
 if fb_token and fb_ad_account:
     print("→ Facebook Ads spend...", flush=True)
     try:
+        # Fetch daily spend, then aggregate by month.
+        # Uses CUTOFF_DATE as start so pre-cutoff pixel warmup spend is excluded.
         params = urllib.parse.urlencode({
             "access_token": fb_token,
             "time_range": json.dumps({
                 "since": CUTOFF_DATE,
                 "until": dt.date.today().isoformat(),
             }),
-            "time_increment": "monthly",
+            "time_increment": "1",
             "fields": "spend,date_start",
             "level": "account",
-            "limit": "100",
+            "limit": "500",
         })
         url = f"https://graph.facebook.com/v21.0/{fb_ad_account}/insights?{params}"
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=30) as resp:
             fb_data = json.loads(resp.read())
         for row in fb_data.get("data", []):
-            # date_start is "YYYY-MM-DD", extract month
-            month = row["date_start"][:7]
+            day = row["date_start"]  # "YYYY-MM-DD"
+            if day < CUTOFF_DATE:
+                continue
+            month = day[:7]
             spend_eur = float(row.get("spend", 0))
             # FB reports in account currency (PLN for this account)
             spend_eur *= FX_TO_EUR.get("pln", 0.235)
