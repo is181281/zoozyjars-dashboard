@@ -1802,7 +1802,7 @@ function recomputeFunnels() {
         const status = s._effective_status ?? s.status;
         if (aStep >= S) reached++;
         else if (S === 1 || aStep >= S - 1) {
-          if (status === "canceled" || status === "canceling") lost++;
+          if (status === "canceled" || status === "canceling" || status === "paused") lost++;
           else pending++;
         }
         if ((s.expected_step ?? 0) >= S) due++;
