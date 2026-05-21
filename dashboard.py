@@ -527,7 +527,7 @@ def funnel_for(subs_list):
                 reached += 1
             elif S == 1 or s["actual_step"] >= S - 1:
                 # Reached the previous step; in this step's denominator
-                if s["status"] in ("canceled", "canceling"):
+                if s["status"] in ("canceled", "canceling", "paused"):
                     lost += 1
                 else:
                     pending += 1
@@ -1072,7 +1072,8 @@ a.email:hover { text-decoration: underline; }
         <thead><tr>
           <th>Cohort</th>
           <th class="num">Size</th>
-          <th class="num" title="Canceled/canceling subs (any time)">Lost</th>
+          <th class="num" title="Currently active (paying) subscriptions">Active</th>
+          <th class="num" title="Size - Active">Lost</th>
           <th class="num">2nd (1st renewal)</th>
           <th class="num">3rd (2nd renewal)</th>
           <th class="num">4th</th>
@@ -2066,6 +2067,7 @@ function renderCohorts() {
     return `<tr class="cohort-row" data-cohort="${c.cohort}" style="cursor:pointer;" title="Click to filter Subscriptions tab by this cohort">
        <td><b>${c.cohort}</b> <span style="color:#8b8775; font-size:11px;">›</span></td>
        <td class="num">${c.size}</td>
+       <td class="num" style="color:#5d8a3d;">${c.active_count}</td>
        <td class="num" style="color:#a04540;">${lostCount || "—"}</td>
        ${cells}
        <td class="num">${fmt.eur(c.revenue_eur)}</td>
