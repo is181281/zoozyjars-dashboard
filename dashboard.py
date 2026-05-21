@@ -2048,8 +2048,7 @@ function renderCohorts() {
   }).join("");
 
   document.getElementById("cohort-table").innerHTML = DATA.cohorts.map(c => {
-    const step2 = c.steps.find(x => x.step === 2);
-    const lostCount = step2 ? step2.lost : 0;
+    const lostCount = c.size - c.active_count;
     const cells = [2, 3, 4, 5].map(S => {
       const st = c.steps.find(x => x.step === S);
       if (!st) return `<td class="num"><span class="muted">—</span></td>`;
