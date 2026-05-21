@@ -1074,7 +1074,6 @@ a.email:hover { text-decoration: underline; }
           <th class="num">4th</th>
           <th class="num">5+</th>
           <th class="num" title="All renewal revenue billed during this calendar month, regardless of which cohort the subscription belongs to.">Revenue €</th>
-          <th class="num" title="Revenue this month / cohort size">€/sub</th>
           <th class="num" title="Average MRR of active subscriptions in this cohort">Avg MRR €</th>
           <th class="num" title="Facebook Ads spend in this month (EUR)">Ad Spend €</th>
           <th class="num" title="Cost per acquisition = Ad Spend / Cohort Size">CAC €</th>
@@ -2067,7 +2066,6 @@ function renderCohorts() {
        <td class="num" style="color:#a04540;">${lostCount || "—"}</td>
        ${cells}
        <td class="num">${fmt.eur(c.revenue_eur)}</td>
-       <td class="num">${fmt.eur2(c.rev_per_sub)}</td>
        <td class="num">${c.avg_mrr_eur ? fmt.eur2(c.avg_mrr_eur) + ' <span class="muted" style="font-size:11px;">(' + c.active_count + ')</span>' : '<span class="muted">—</span>'}</td>
        <td class="num">${c.ad_spend_eur ? fmt.eur(c.ad_spend_eur) : '<span class="muted">—</span>'}</td>
        <td class="num">${c.cac_eur ? fmt.eur2(c.cac_eur) : '<span class="muted">—</span>'}</td>
