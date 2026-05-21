@@ -589,8 +589,7 @@ for k in sorted(subs_by_cohort.keys()):
     cohort_ltv = round(ltv_by_cohort.get(k, 0), 0)
     size = len(cs)
     cac = round(ad_spend / size, 2) if size and ad_spend else 0
-    avg_ltv = round(cohort_ltv / size, 2) if size else 0
-    ltv_cac = round(avg_ltv / cac, 2) if cac > 0 else 0
+    ltv_cac = round(cohort_ltv / ad_spend, 2) if ad_spend > 0 else 0
     cohort_table.append({
         "cohort": k,
         "size": size,
@@ -600,7 +599,6 @@ for k in sorted(subs_by_cohort.keys()):
         "ad_spend_eur": ad_spend,
         "cac_eur": cac,
         "cohort_ltv_eur": cohort_ltv,
-        "avg_ltv_eur": avg_ltv,
         "ltv_cac": ltv_cac,
     })
 
@@ -1075,8 +1073,8 @@ a.email:hover { text-decoration: underline; }
           <th class="num" title="Revenue this month / cohort size">€/sub</th>
           <th class="num" title="Facebook Ads spend in this month (EUR)">Ad Spend €</th>
           <th class="num" title="Cost per acquisition = Ad Spend / Cohort Size">CAC €</th>
-          <th class="num" title="Average lifetime value per customer in this cohort">Avg LTV €</th>
-          <th class="num" title="Lifetime Value / Customer Acquisition Cost">LTV/CAC</th>
+          <th class="num" title="Total lifetime value of all customers in this cohort">LTV €</th>
+          <th class="num" title="Total LTV / Total Ad Spend">LTV/CAC</th>
         </tr></thead>
         <tbody id="cohort-table"></tbody>
       </table>
@@ -2067,7 +2065,7 @@ function renderCohorts() {
        <td class="num">${fmt.eur2(c.rev_per_sub)}</td>
        <td class="num">${c.ad_spend_eur ? fmt.eur(c.ad_spend_eur) : '<span class="muted">—</span>'}</td>
        <td class="num">${c.cac_eur ? fmt.eur2(c.cac_eur) : '<span class="muted">—</span>'}</td>
-       <td class="num">${c.avg_ltv_eur ? fmt.eur2(c.avg_ltv_eur) : '<span class="muted">—</span>'}</td>
+       <td class="num">${c.cohort_ltv_eur ? fmt.eur(c.cohort_ltv_eur) : '<span class="muted">—</span>'}</td>
        <td class="num" style="color:${ltvCacColor}; font-weight:600;">${c.ltv_cac ? c.ltv_cac.toFixed(2) + 'x' : '<span class="muted" style="font-weight:normal;">—</span>'}</td>
      </tr>`;
   }).join("");
