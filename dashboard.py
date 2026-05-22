@@ -474,6 +474,7 @@ def compute_expected_step(age_days, cycle_days):
 for s in sub_rows:
     age = (NOW_TS - s["created"]) / 86400
     s["age_days"] = round(age, 1)
+    s["week"] = dt.datetime.utcfromtimestamp(s["created"]).strftime("%G-W%V")
     s["actual_step"] = 1 + renewals_per_sub.get(s["id"], 0)
     s["expected_step"] = compute_expected_step(age, s["period_days"] or 28)
 
@@ -1362,7 +1363,7 @@ function renderSecondaryTables() {
 }
 
 // ============ Subscriptions table ============
-let subsState = {status: "all", lang: "", cycle: "", phase: "", search: "", ordersOp: "", ordersVal: null, cohort: "", sortKey: "mrr_eur", sortDir: -1};
+let subsState = {status: "all", lang: "", cycle: "", phase: "", search: "", ordersOp: "", ordersVal: null, cohort: "", week: "", sortKey: "mrr_eur", sortDir: -1};
 
 function subCohortKey(s) {
   return new Date(s.created * 1000).toISOString().slice(0, 7); // YYYY-MM
@@ -1721,6 +1722,7 @@ function filterSubs() {
     if (subsState.cycle && String(s.period_days) !== subsState.cycle) return false;
     if (subsState.phase && s.phase !== subsState.phase) return false;
     if (subsState.cohort && subCohortKey(s) !== subsState.cohort) return false;
+    if (subsState.week && s.week !== subsState.week) return false;
     if (subsState.ordersOp && subsState.ordersVal != null) {
       const orders = s._effective_step ?? s.actual_step;
       const v = subsState.ordersVal;
@@ -1748,12 +1750,14 @@ function renderSubs() {
   document.getElementById("filter-count").textContent = `${rows.length} / ${DATA.subs.length}`;
   // Cohort filter badge
   const badge = document.getElementById("cohort-badge");
-  if (subsState.cohort) {
+  const filterLabel = subsState.week || subsState.cohort;
+  if (filterLabel) {
     badge.style.display = "inline-block";
-    badge.innerHTML = `cohort ${subsState.cohort} <span style="cursor:pointer; margin-left:6px; opacity:0.6;" id="cohort-badge-clear">✕</span>`;
+    badge.innerHTML = `cohort ${filterLabel} <span style="cursor:pointer; margin-left:6px; opacity:0.6;" id="cohort-badge-clear">✕</span>`;
     document.getElementById("cohort-badge-clear").onclick = (e) => {
       e.stopPropagation();
       subsState.cohort = "";
+      subsState.week = "";
       renderSubs();
     };
   } else {
@@ -1871,16 +1875,10 @@ function recomputeFunnels() {
     const cohort = new Date(s.created * 1000).toISOString().slice(0, 7);
     (byCohort[cohort] = byCohort[cohort] || []).push(s);
   }
-  // Per week (for sub-cohorts)
+  // Per week (for sub-cohorts) — use Python-assigned week key
   const byWeek = {};
   for (const s of DATA.subs) {
-    const d = new Date(s.created * 1000);
-    // ISO week: get year-Wnn
-    const jan4 = new Date(d.getFullYear(), 0, 4);
-    const dayOfYear = Math.floor((d - new Date(d.getFullYear(), 0, 1)) / 86400000) + 1;
-    const wn = Math.ceil((dayOfYear + jan4.getDay() - 1) / 7);
-    const wk = d.getFullYear() + "-W" + String(wn).padStart(2, "0");
-    (byWeek[wk] = byWeek[wk] || []).push(s);
+    if (s.week) (byWeek[s.week] = byWeek[s.week] || []).push(s);
   }
   for (const c of DATA.cohorts) {
     if (byCohort[c.cohort]) c.steps = bucketsFor(byCohort[c.cohort]);
@@ -2152,7 +2150,7 @@ function renderCohorts() {
      </tr>`;
     if (!hasWeeks) return monthRow;
     const weekRows = c.weeks.map(w =>
-      `<tr class="week-row week-of-${c.cohort}" style="display:none; background:#faf9f5;">
+      `<tr class="week-row week-of-${c.cohort}" data-week="${w.cohort}" style="display:none; background:#faf9f5; cursor:pointer;" title="Click to filter Subscriptions by this week">
          <td style="padding-left:24px; color:#8b8775; font-size:12px;">${w.label}</td>
          ${cohortCells(w, true)}
        </tr>`
@@ -2186,6 +2184,27 @@ function renderCohorts() {
       weekRows.forEach(r => r.style.display = isVisible ? "none" : "");
       const tog = row.querySelector(".week-toggle");
       if (tog) tog.textContent = isVisible ? "▸" : "▾";
+    };
+  });
+
+  // Click week row → filter Subscriptions tab by that week
+  document.querySelectorAll(".week-row").forEach(row => {
+    row.onclick = (e) => {
+      e.stopPropagation();
+      const week = row.dataset.week;
+      subsState.week = week;
+      subsState.cohort = "";
+      subsState.status = "all";
+      document.querySelectorAll(".filter-pill[data-status]").forEach(p => {
+        p.classList.toggle("on", p.dataset.status === "all");
+      });
+      document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+      document.querySelectorAll(".panel").forEach(x => x.classList.remove("active"));
+      const subTab = document.querySelector('.tab[data-panel="subs"]');
+      if (subTab) subTab.classList.add("active");
+      document.getElementById("panel-subs").classList.add("active");
+      renderSubs();
+      window.scrollTo({top: document.getElementById("panel-subs").offsetTop - 20, behavior: "smooth"});
     };
   });
 }
