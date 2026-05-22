@@ -585,17 +585,23 @@ for s in sub_rows:
         customer_cohort[cid] = cohort
         customer_cohort_week[cid] = week
 
+# LTV from PaymentIntents (includes test box one-off payments + subscription renewals)
+# Grouped by customer's signup cohort month/week.
 ltv_by_cohort = defaultdict(float)
 ltv_by_week = defaultdict(float)
-for cid, orders in by_customer.items():
+_pi_by_customer = defaultdict(float)
+for pi in payment_intents:
+    cid = pi.customer if isinstance(pi.customer, str) else _attr(pi.customer, "id")
+    if cid and cid not in EXCLUDE_CUSTOMER_IDS:
+        _pi_by_customer[cid] += to_eur(pi.amount, pi.currency)
+for cid, total in _pi_by_customer.items():
     cohort = customer_cohort.get(cid)
     week = customer_cohort_week.get(cid)
     if not cohort:
         continue
-    for o in orders:
-        ltv_by_cohort[cohort] += o["amount_eur"]
-        if week:
-            ltv_by_week[week] += o["amount_eur"]
+    ltv_by_cohort[cohort] += total
+    if week:
+        ltv_by_week[week] += total
 
 # Group subs by week
 subs_by_week = defaultdict(list)
