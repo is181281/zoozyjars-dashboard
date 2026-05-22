@@ -286,6 +286,7 @@ print(f"   {len(refunds)} successful refunds")
 # FACEBOOK ADS SPEND (for CAC per cohort)
 # ------------------------------------------------------------
 fb_spend_by_month = {}  # "2026-04" → spend in EUR
+fb_spend_by_week = {}   # "2026-W16" → spend in EUR
 fb_token = os.environ.get("FB_ACCESS_TOKEN", "")
 fb_ad_account = os.environ.get("FB_AD_ACCOUNT_ID", "")
 if fb_token and fb_ad_account:
@@ -308,15 +309,18 @@ if fb_token and fb_ad_account:
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=30) as resp:
             fb_data = json.loads(resp.read())
+        fb_spend_by_week = {}  # "2026-W16" → spend in EUR
         for row in fb_data.get("data", []):
             day = row["date_start"]  # "YYYY-MM-DD"
             if day < CUTOFF_DATE:
                 continue
             month = day[:7]
+            week = dt.date.fromisoformat(day).strftime("%G-W%V")
             spend_eur = float(row.get("spend", 0))
             # FB reports in account currency (PLN for this account)
             spend_eur *= FX_TO_EUR.get("pln", 0.235)
             fb_spend_by_month[month] = fb_spend_by_month.get(month, 0) + spend_eur
+            fb_spend_by_week[week] = fb_spend_by_week.get(week, 0) + spend_eur
         print(f"   {len(fb_spend_by_month)} months of ad spend data")
         for m in sorted(fb_spend_by_month):
             print(f"     {m}: €{fb_spend_by_month[m]:.0f}")
@@ -568,47 +572,93 @@ for r in refunds:
     month = month_warsaw(r.created)
     revenue_by_calendar_month[month] -= to_eur(r.amount, r.currency)
 
-# LTV per cohort: map customer_id → cohort month, then sum payments
-customer_cohort = {}  # customer_id → "YYYY-MM"
+# LTV per cohort: map customer_id → cohort month + week, then sum payments
+customer_cohort = {}       # customer_id → "YYYY-MM"
+customer_cohort_week = {}  # customer_id → "YYYY-Wnn"
 for s in sub_rows:
     cid = s["customer_id"]
-    cohort = dt.datetime.utcfromtimestamp(s["created"]).strftime("%Y-%m")
-    # Use earliest sub for customer's cohort
+    created_dt = dt.datetime.utcfromtimestamp(s["created"])
+    cohort = created_dt.strftime("%Y-%m")
+    week = created_dt.strftime("%G-W%V")
     if cid not in customer_cohort or cohort < customer_cohort[cid]:
         customer_cohort[cid] = cohort
+        customer_cohort_week[cid] = week
 
-ltv_by_cohort = defaultdict(float)  # "YYYY-MM" → total LTV EUR
+ltv_by_cohort = defaultdict(float)
+ltv_by_week = defaultdict(float)
 for cid, orders in by_customer.items():
     cohort = customer_cohort.get(cid)
+    week = customer_cohort_week.get(cid)
     if not cohort:
         continue
     for o in orders:
         ltv_by_cohort[cohort] += o["amount_eur"]
+        if week:
+            ltv_by_week[week] += o["amount_eur"]
 
-cohort_table = []
-for k in sorted(subs_by_cohort.keys()):
-    cs = subs_by_cohort[k]
-    revenue = revenue_by_calendar_month.get(k, 0.0)
-    ad_spend = round(fb_spend_by_month.get(k, 0), 0)
-    cohort_ltv = round(ltv_by_cohort.get(k, 0), 0)
-    size = len(cs)
+# Group subs by week
+subs_by_week = defaultdict(list)
+for s in sub_rows:
+    week = dt.datetime.utcfromtimestamp(s["created"]).strftime("%G-W%V")
+    subs_by_week[week].append(s)
+
+def _week_label(iso_week):
+    """Convert '2026-W16' → 'W16 (Apr 14)'"""
+    year, wn = int(iso_week[:4]), int(iso_week[6:])
+    monday = dt.date.fromisocalendar(year, wn, 1)
+    return f"W{wn} ({monday.strftime('%b %d')})"
+
+def _build_cohort_entry(key, subs_list, ad_spend_raw, ltv_raw, label=None):
+    size = len(subs_list)
+    ad_spend = round(ad_spend_raw, 0)
+    cohort_ltv = round(ltv_raw, 0)
     cac = round(ad_spend / size, 2) if size and ad_spend else 0
     ltv_cac = round(cohort_ltv / ad_spend, 2) if ad_spend > 0 else 0
-    active_mrrs = [s["mrr_eur"] for s in cs if s["status"] == "active"]
+    active_mrrs = [s["mrr_eur"] for s in subs_list if s["status"] == "active"]
     avg_mrr = round(sum(active_mrrs) / len(active_mrrs), 2) if active_mrrs else 0
-    cohort_table.append({
-        "cohort": k,
+    return {
+        "cohort": key,
+        "label": label or key,
         "size": size,
-        "steps": funnel_for(cs),
-        "revenue_eur": round(revenue, 0),
-        "rev_per_sub": round(revenue / size, 2) if cs else 0,
+        "steps": funnel_for(subs_list),
+        "revenue_eur": 0,  # only set for monthly
         "ad_spend_eur": ad_spend,
         "cac_eur": cac,
         "cohort_ltv_eur": cohort_ltv,
         "ltv_cac": ltv_cac,
         "avg_mrr_eur": avg_mrr,
         "active_count": len(active_mrrs),
-    })
+    }
+
+cohort_table = []
+for k in sorted(subs_by_cohort.keys()):
+    cs = subs_by_cohort[k]
+    revenue = revenue_by_calendar_month.get(k, 0.0)
+    ad_spend = fb_spend_by_month.get(k, 0)
+    cohort_ltv = ltv_by_cohort.get(k, 0)
+    size = len(cs)
+
+    # Weekly sub-cohorts for this month
+    month_weeks = sorted(set(
+        dt.datetime.utcfromtimestamp(s["created"]).strftime("%G-W%V") for s in cs
+    ))
+    weeks = []
+    for w in month_weeks:
+        ws = subs_by_week.get(w, [])
+        # Only include subs that belong to this month
+        ws_in_month = [s for s in ws if dt.datetime.utcfromtimestamp(s["created"]).strftime("%Y-%m") == k]
+        if ws_in_month:
+            weeks.append(_build_cohort_entry(
+                w, ws_in_month,
+                fb_spend_by_week.get(w, 0),
+                ltv_by_week.get(w, 0),
+                label=_week_label(w),
+            ))
+
+    entry = _build_cohort_entry(k, cs, ad_spend, cohort_ltv)
+    entry["revenue_eur"] = round(revenue, 0)
+    entry["weeks"] = weeks
+    cohort_table.append(entry)
 
 # ------------------------------------------------------------
 # PRODUCTION FORECAST (active subs only, project upcoming charges)
@@ -1821,8 +1871,24 @@ function recomputeFunnels() {
     const cohort = new Date(s.created * 1000).toISOString().slice(0, 7);
     (byCohort[cohort] = byCohort[cohort] || []).push(s);
   }
+  // Per week (for sub-cohorts)
+  const byWeek = {};
+  for (const s of DATA.subs) {
+    const d = new Date(s.created * 1000);
+    // ISO week: get year-Wnn
+    const jan4 = new Date(d.getFullYear(), 0, 4);
+    const dayOfYear = Math.floor((d - new Date(d.getFullYear(), 0, 1)) / 86400000) + 1;
+    const wn = Math.ceil((dayOfYear + jan4.getDay() - 1) / 7);
+    const wk = d.getFullYear() + "-W" + String(wn).padStart(2, "0");
+    (byWeek[wk] = byWeek[wk] || []).push(s);
+  }
   for (const c of DATA.cohorts) {
     if (byCohort[c.cohort]) c.steps = bucketsFor(byCohort[c.cohort]);
+    if (c.weeks) {
+      for (const w of c.weeks) {
+        if (byWeek[w.cohort]) w.steps = bucketsFor(byWeek[w.cohort]);
+      }
+    }
   }
   // Re-render dependent views
   renderCohorts();
@@ -2048,9 +2114,9 @@ function renderCohorts() {
       </div>`;
   }).join("");
 
-  document.getElementById("cohort-table").innerHTML = DATA.cohorts.map(c => {
+  function cohortCells(c, isWeek) {
     const lostCount = c.size - c.active_count;
-    const cells = [2, 3, 4, 5].map(S => {
+    const funnelCells = [2, 3, 4, 5].map(S => {
       const st = c.steps.find(x => x.step === S);
       if (!st) return `<td class="num"><span class="muted">—</span></td>`;
       const decided = st.reached + st.lost;
@@ -2064,40 +2130,62 @@ function renderCohorts() {
       </td>`;
     }).join("");
     const ltvCacColor = c.ltv_cac >= 3 ? "#5d8a3d" : c.ltv_cac >= 1 ? "#b58a30" : c.ltv_cac > 0 ? "#a04540" : "#8b8775";
-    return `<tr class="cohort-row" data-cohort="${c.cohort}" style="cursor:pointer;" title="Click to filter Subscriptions tab by this cohort">
-       <td><b>${c.cohort}</b> <span style="color:#8b8775; font-size:11px;">›</span></td>
+    return `
        <td class="num">${c.size}</td>
        <td class="num" style="color:#5d8a3d;">${c.active_count}</td>
        <td class="num" style="color:#a04540;">${lostCount || "—"}</td>
-       ${cells}
-       <td class="num">${fmt.eur(c.revenue_eur)}</td>
-       <td class="num">${c.avg_mrr_eur ? fmt.eur2(c.avg_mrr_eur) + ' <span class="muted" style="font-size:11px;">(' + c.active_count + ')</span>' : '<span class="muted">—</span>'}</td>
+       ${funnelCells}
+       <td class="num">${isWeek ? '<span class="muted">—</span>' : fmt.eur(c.revenue_eur)}</td>
+       <td class="num">${c.avg_mrr_eur ? fmt.eur2(c.avg_mrr_eur) : '<span class="muted">—</span>'}</td>
        <td class="num">${c.ad_spend_eur ? fmt.eur(c.ad_spend_eur) : '<span class="muted">—</span>'}</td>
        <td class="num">${c.cac_eur ? fmt.eur2(c.cac_eur) : '<span class="muted">—</span>'}</td>
        <td class="num">${c.cohort_ltv_eur ? fmt.eur(c.cohort_ltv_eur) : '<span class="muted">—</span>'}</td>
-       <td class="num" style="color:${ltvCacColor}; font-weight:600;">${c.ltv_cac ? c.ltv_cac.toFixed(2) + 'x' : '<span class="muted" style="font-weight:normal;">—</span>'}</td>
+       <td class="num" style="color:${ltvCacColor}; font-weight:600;">${c.ltv_cac ? c.ltv_cac.toFixed(2) + 'x' : '<span class="muted" style="font-weight:normal;">—</span>'}</td>`;
+  }
+
+  document.getElementById("cohort-table").innerHTML = DATA.cohorts.map(c => {
+    const hasWeeks = c.weeks && c.weeks.length > 1;
+    const toggle = hasWeeks ? `<span class="week-toggle" style="cursor:pointer; font-size:11px; color:#8b8775; margin-left:4px;">▸</span>` : "";
+    const monthRow = `<tr class="cohort-row" data-cohort="${c.cohort}" style="cursor:pointer;">
+       <td><b>${c.cohort}</b>${toggle}</td>
+       ${cohortCells(c, false)}
      </tr>`;
+    if (!hasWeeks) return monthRow;
+    const weekRows = c.weeks.map(w =>
+      `<tr class="week-row week-of-${c.cohort}" style="display:none; background:#faf9f5;">
+         <td style="padding-left:24px; color:#8b8775; font-size:12px;">${w.label}</td>
+         ${cohortCells(w, true)}
+       </tr>`
+    ).join("");
+    return monthRow + weekRows;
   }).join("");
 
-  // Bind clicks: cohort row → filter Subscriptions tab and switch to it
+  // Toggle weekly rows on click
   document.querySelectorAll(".cohort-row").forEach(row => {
-    row.onclick = () => {
+    row.onclick = (e) => {
       const cohort = row.dataset.cohort;
-      subsState.cohort = cohort;
-      // reset other filters that may obscure the view
-      subsState.status = "all";
-      document.querySelectorAll(".filter-pill[data-status]").forEach(p => {
-        p.classList.toggle("on", p.dataset.status === "all");
-      });
-      // Switch to Subscriptions tab
-      document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
-      document.querySelectorAll(".panel").forEach(x => x.classList.remove("active"));
-      const subTab = document.querySelector('.tab[data-panel="subs"]');
-      if (subTab) subTab.classList.add("active");
-      document.getElementById("panel-subs").classList.add("active");
-      renderSubs();
-      // Scroll to top of subs panel
-      window.scrollTo({top: document.getElementById("panel-subs").offsetTop - 20, behavior: "smooth"});
+      const weekRows = document.querySelectorAll(`.week-of-${cohort}`);
+      if (weekRows.length === 0) {
+        // No weeks — filter Subscriptions tab
+        subsState.cohort = cohort;
+        subsState.status = "all";
+        document.querySelectorAll(".filter-pill[data-status]").forEach(p => {
+          p.classList.toggle("on", p.dataset.status === "all");
+        });
+        document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+        document.querySelectorAll(".panel").forEach(x => x.classList.remove("active"));
+        const subTab = document.querySelector('.tab[data-panel="subs"]');
+        if (subTab) subTab.classList.add("active");
+        document.getElementById("panel-subs").classList.add("active");
+        renderSubs();
+        window.scrollTo({top: document.getElementById("panel-subs").offsetTop - 20, behavior: "smooth"});
+        return;
+      }
+      // Toggle week rows
+      const isVisible = weekRows[0].style.display !== "none";
+      weekRows.forEach(r => r.style.display = isVisible ? "none" : "");
+      const tog = row.querySelector(".week-toggle");
+      if (tog) tog.textContent = isVisible ? "▸" : "▾";
     };
   });
 }
