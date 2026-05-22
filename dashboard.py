@@ -603,6 +603,10 @@ for cid, total in _pi_by_customer.items():
     if week:
         ltv_by_week[week] += total
 
+# Annotate each sub with per-customer LTV
+for s in sub_rows:
+    s["ltv_eur"] = round(_pi_by_customer.get(s["customer_id"], 0), 2)
+
 # Group subs by week
 subs_by_week = defaultdict(list)
 for s in sub_rows:
@@ -1047,6 +1051,7 @@ a.email:hover { text-decoration: underline; }
         <th class="num" data-key="n_jars">Jars</th>
         <th class="num" data-key="period_days">Cycle</th>
         <th class="num" data-key="mrr_eur">MRR €</th>
+        <th class="num" data-key="ltv_eur">LTV €</th>
         <th data-key="created">Started</th>
         <th data-key="current_period_end">Next bill</th>
         <th data-key="status_change_at" title="When the sub was canceled (canceled/canceling) or paused (paused)">Canceled / Paused</th>
@@ -1753,7 +1758,9 @@ function renderSubs() {
     if (av == null) return 1; if (bv == null) return -1;
     return (av < bv ? -1 : av > bv ? 1 : 0) * subsState.sortDir;
   });
-  document.getElementById("filter-count").textContent = `${rows.length} / ${DATA.subs.length}`;
+  const ltvSum = rows.reduce((sum, s) => sum + (s.ltv_eur || 0), 0);
+  const mrrSum = rows.filter(s => s.status === "active").reduce((sum, s) => sum + (s.mrr_eur || 0), 0);
+  document.getElementById("filter-count").innerHTML = `${rows.length} / ${DATA.subs.length} · LTV ${fmt.eur(ltvSum)} · MRR ${fmt.eur2(mrrSum)}`;
   // Cohort filter badge
   const badge = document.getElementById("cohort-badge");
   const filterLabel = subsState.week || subsState.cohort;
@@ -1803,6 +1810,7 @@ function renderSubs() {
         <td class="num">${s.n_jars}</td>
         <td class="num">${cycle}</td>
         <td class="num">${fmt.eur2(s.mrr_eur)}</td>
+        <td class="num">${fmt.eur2(s.ltv_eur)}</td>
         <td>${fmt.date(s.created)} <span class="muted" style="font-size:11px;">(${fmt.daysAgo(s.created)})</span></td>
         <td>${fmt.date(s.current_period_end)}</td>
         <td>${
@@ -1819,7 +1827,7 @@ function renderSubs() {
             style="width:160px; padding:4px 8px; border:1px solid #d6d2c5; border-radius:4px; font:inherit; font-size:12px; background:white;">
         </td>
       </tr>
-      <tr class="detail-row" style="display:none;"><td colspan="11" class="detail">
+      <tr class="detail-row" style="display:none;"><td colspan="12" class="detail">
         <div><b>${s.id}</b> · cust ${s.customer_id} · raw_status: <code>${s.raw_status}</code>
           ${s.cancel_at_period_end ? "· cancel_at_period_end" : ""}
           ${s.pause_collection ? `· paused (${s.pause_collection.behavior || ""})` : ""}
