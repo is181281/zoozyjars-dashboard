@@ -309,13 +309,13 @@ if fb_token and fb_ad_account:
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=30) as resp:
             fb_data = json.loads(resp.read())
-        fb_spend_by_week = {}  # "2026-W16" → spend in EUR
+        fb_spend_by_week = {}  # "YYYY-MM:YYYY-Wnn" → spend in EUR (month-scoped)
         for row in fb_data.get("data", []):
             day = row["date_start"]  # "YYYY-MM-DD"
             if day < CUTOFF_DATE:
                 continue
             month = day[:7]
-            week = dt.date.fromisoformat(day).strftime("%G-W%V")
+            week = month + ":" + dt.date.fromisoformat(day).strftime("%G-W%V")
             spend_eur = float(row.get("spend", 0))
             # FB reports in account currency (PLN for this account)
             spend_eur *= FX_TO_EUR.get("pln", 0.235)
@@ -474,7 +474,8 @@ def compute_expected_step(age_days, cycle_days):
 for s in sub_rows:
     age = (NOW_TS - s["created"]) / 86400
     s["age_days"] = round(age, 1)
-    s["week"] = dt.datetime.utcfromtimestamp(s["created"]).strftime("%G-W%V")
+    _created_dt = dt.datetime.utcfromtimestamp(s["created"])
+    s["week"] = _created_dt.strftime("%Y-%m") + ":" + _created_dt.strftime("%G-W%V")
     s["actual_step"] = 1 + renewals_per_sub.get(s["id"], 0)
     s["expected_step"] = compute_expected_step(age, s["period_days"] or 28)
 
@@ -575,12 +576,12 @@ for r in refunds:
 
 # LTV per cohort: map customer_id → cohort month + week, then sum payments
 customer_cohort = {}       # customer_id → "YYYY-MM"
-customer_cohort_week = {}  # customer_id → "YYYY-Wnn"
+customer_cohort_week = {}  # customer_id → "YYYY-MM:YYYY-Wnn" (month-scoped)
 for s in sub_rows:
     cid = s["customer_id"]
     created_dt = dt.datetime.utcfromtimestamp(s["created"])
     cohort = created_dt.strftime("%Y-%m")
-    week = created_dt.strftime("%G-W%V")
+    week = cohort + ":" + created_dt.strftime("%G-W%V")
     if cid not in customer_cohort or cohort < customer_cohort[cid]:
         customer_cohort[cid] = cohort
         customer_cohort_week[cid] = week
@@ -615,14 +616,14 @@ for cid, total in _pi_by_customer.items():
 for s in sub_rows:
     s["ltv_eur"] = round(_pi_by_customer.get(s["customer_id"], 0), 2)
 
-# Group subs by week
+# Group subs by month-scoped week (using s["week"] which is "YYYY-MM:YYYY-Wnn")
 subs_by_week = defaultdict(list)
 for s in sub_rows:
-    week = dt.datetime.utcfromtimestamp(s["created"]).strftime("%G-W%V")
-    subs_by_week[week].append(s)
+    subs_by_week[s["week"]].append(s)
 
-def _week_label(iso_week):
-    """Convert '2026-W16' → 'W16 (Apr 14)'"""
+def _week_label(scoped_week):
+    """Convert '2026-04:2026-W16' → 'W16 (Apr 14)'"""
+    iso_week = scoped_week.split(":")[-1]  # extract "2026-W16"
     year, wn = int(iso_week[:4]), int(iso_week[6:])
     monday = dt.date.fromisocalendar(year, wn, 1)
     return f"W{wn} ({monday.strftime('%b %d')})"
@@ -657,18 +658,14 @@ for k in sorted(subs_by_cohort.keys()):
     cohort_ltv = ltv_by_cohort.get(k, 0)
     size = len(cs)
 
-    # Weekly sub-cohorts for this month
-    month_weeks = sorted(set(
-        dt.datetime.utcfromtimestamp(s["created"]).strftime("%G-W%V") for s in cs
-    ))
+    # Weekly sub-cohorts for this month (keys are "YYYY-MM:YYYY-Wnn")
+    month_weeks = sorted(set(s["week"] for s in cs))
     weeks = []
     for w in month_weeks:
         ws = subs_by_week.get(w, [])
-        # Only include subs that belong to this month
-        ws_in_month = [s for s in ws if dt.datetime.utcfromtimestamp(s["created"]).strftime("%Y-%m") == k]
-        if ws_in_month:
+        if ws:
             weeks.append(_build_cohort_entry(
-                w, ws_in_month,
+                w, ws,
                 fb_spend_by_week.get(w, 0),
                 ltv_by_week.get(w, 0),
                 label=_week_label(w),
