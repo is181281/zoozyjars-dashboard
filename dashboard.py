@@ -45,6 +45,7 @@ CUTOFF_TS = int(dt.datetime.fromisoformat(CUTOFF_DATE).timestamp())
 EXCLUDE_SUB_IDS = {
     "sub_1TNu3cFTFpBXf4s3uXlKafw6",  # Igor test sub
     "sub_1TOvG6FTFpBXf4s3q32zlQFY",  # Fedya — canceled the old one and made a new one (sub_1TR9xY...)
+    "sub_1Tau2iFTFpBXf4s3lABoJeVu",  # Dmytro Matsalyshenko — incomplete (failed payment link attempt)
 }
 
 # Exclude customers entirely (their subs AND invoices won't show up anywhere).
