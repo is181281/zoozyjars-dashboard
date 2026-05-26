@@ -424,7 +424,7 @@ def sub_row(s):
         "mrr_eur": round(mrr_eur, 2),
         "period_days": period_d,
         "items": items,
-        "n_jars": sum(it["qty"] for it in items),
+        "n_jars": sum(it["qty"] for it in items if it["interval"]),
     }
 
 print("→ normalize subscriptions...", flush=True)
