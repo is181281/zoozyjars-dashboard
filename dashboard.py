@@ -593,11 +593,14 @@ ltv_by_cohort = defaultdict(float)
 ltv_by_week = defaultdict(float)
 _pi_by_customer = defaultdict(float)
 _pi_to_customer = {}  # PI id → customer id (for refund attribution)
+_first_pi_date = {}   # customer_id → earliest PaymentIntent timestamp
 for pi in payment_intents:
     cid = pi.customer if isinstance(pi.customer, str) else _attr(pi.customer, "id")
     if cid and cid not in EXCLUDE_CUSTOMER_IDS:
         _pi_by_customer[cid] += to_eur(pi.amount, pi.currency)
         _pi_to_customer[pi.id] = cid
+        if cid not in _first_pi_date or pi.created < _first_pi_date[cid]:
+            _first_pi_date[cid] = pi.created
 # Subtract refunds
 for r in refunds:
     pi_id = _attr(r, "payment_intent")
@@ -613,9 +616,48 @@ for cid, total in _pi_by_customer.items():
     if week:
         ltv_by_week[week] += total
 
-# Annotate each sub with per-customer LTV
+# Annotate each sub with per-customer LTV and real start date (first payment, not sub creation)
 for s in sub_rows:
     s["ltv_eur"] = round(_pi_by_customer.get(s["customer_id"], 0), 2)
+    first_pi = _first_pi_date.get(s["customer_id"])
+    if first_pi and first_pi < s["created"]:
+        s["created"] = first_pi
+        # Recalculate age and week key based on real start date
+        age = (NOW_TS - first_pi) / 86400
+        s["age_days"] = round(age, 1)
+        _created_dt = dt.datetime.utcfromtimestamp(first_pi)
+        s["week"] = _created_dt.strftime("%Y-%m") + ":" + _created_dt.strftime("%G-W%V")
+
+# Rebuild cohort mapping after start date correction
+customer_cohort.clear()
+customer_cohort_week.clear()
+for s in sub_rows:
+    cid = s["customer_id"]
+    created_dt = dt.datetime.utcfromtimestamp(s["created"])
+    cohort = created_dt.strftime("%Y-%m")
+    week = cohort + ":" + created_dt.strftime("%G-W%V")
+    if cid not in customer_cohort or cohort < customer_cohort[cid]:
+        customer_cohort[cid] = cohort
+        customer_cohort_week[cid] = week
+
+# Rebuild LTV by cohort/week with corrected dates
+ltv_by_cohort.clear()
+ltv_by_week.clear()
+for cid, total in _pi_by_customer.items():
+    cohort = customer_cohort.get(cid)
+    week = customer_cohort_week.get(cid)
+    if not cohort:
+        continue
+    ltv_by_cohort[cohort] += total
+    if week:
+        ltv_by_week[week] += total
+
+# Rebuild cohort groupings after start date correction
+subs_by_cohort = defaultdict(list)
+for s in sub_rows:
+    cohort = dt.datetime.utcfromtimestamp(s["created"]).strftime("%Y-%m")
+    subs_by_cohort[cohort].append(s)
+total_funnel_steps = funnel_for(sub_rows)
 
 # Group subs by month-scoped week (using s["week"] which is "YYYY-MM:YYYY-Wnn")
 subs_by_week = defaultdict(list)
