@@ -461,8 +461,8 @@ revenue_per_sub = defaultdict(float)
 for inv in invoices:
     if (inv.amount_paid or 0) <= 0:
         continue
-    if inv.billing_reason != "subscription_cycle":
-        # only count real cycle renewals; skip create/update/manual
+    if inv.billing_reason in ("subscription_create", "subscription_update"):
+        # skip zero-amount trial creation and plan changes; count cycle + manual
         continue
     sid = invoice_sub_id(inv)
     if not sid:
