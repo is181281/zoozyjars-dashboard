@@ -2165,7 +2165,7 @@ function renderCohorts() {
     const hasWeeks = c.weeks && c.weeks.length > 1;
     const toggle = hasWeeks ? `<span class="week-toggle" style="cursor:pointer; font-size:11px; color:#8b8775; margin-left:4px;">▸</span>` : "";
     const monthRow = `<tr class="cohort-row" data-cohort="${c.cohort}" style="cursor:pointer;">
-       <td><b>${c.cohort}</b>${toggle}</td>
+       <td><span class="cohort-label" data-cohort="${c.cohort}" title="Click to filter Subscriptions by this month"><b>${c.cohort}</b></span>${toggle}</td>
        ${cohortCells(c, false)}
      </tr>`;
     if (!hasWeeks) return monthRow;
@@ -2178,28 +2178,34 @@ function renderCohorts() {
     return monthRow + weekRows;
   }).join("");
 
-  // Toggle weekly rows on click
+  // Click month label → filter Subscriptions by that month
+  document.querySelectorAll(".cohort-label").forEach(label => {
+    label.onclick = (e) => {
+      e.stopPropagation();
+      const cohort = label.dataset.cohort;
+      subsState.cohort = cohort;
+      subsState.week = "";
+      subsState.status = "all";
+      document.querySelectorAll(".filter-pill[data-status]").forEach(p => {
+        p.classList.toggle("on", p.dataset.status === "all");
+      });
+      document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+      document.querySelectorAll(".panel").forEach(x => x.classList.remove("active"));
+      const subTab = document.querySelector('.tab[data-panel="subs"]');
+      if (subTab) subTab.classList.add("active");
+      document.getElementById("panel-subs").classList.add("active");
+      renderSubs();
+      window.scrollTo({top: document.getElementById("panel-subs").offsetTop - 20, behavior: "smooth"});
+    };
+  });
+
+  // Click anywhere else on month row → toggle weekly rows
   document.querySelectorAll(".cohort-row").forEach(row => {
     row.onclick = (e) => {
+      if (e.target.closest(".cohort-label")) return; // handled above
       const cohort = row.dataset.cohort;
       const weekRows = document.querySelectorAll(`.week-of-${cohort}`);
-      if (weekRows.length === 0) {
-        // No weeks — filter Subscriptions tab
-        subsState.cohort = cohort;
-        subsState.status = "all";
-        document.querySelectorAll(".filter-pill[data-status]").forEach(p => {
-          p.classList.toggle("on", p.dataset.status === "all");
-        });
-        document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
-        document.querySelectorAll(".panel").forEach(x => x.classList.remove("active"));
-        const subTab = document.querySelector('.tab[data-panel="subs"]');
-        if (subTab) subTab.classList.add("active");
-        document.getElementById("panel-subs").classList.add("active");
-        renderSubs();
-        window.scrollTo({top: document.getElementById("panel-subs").offsetTop - 20, behavior: "smooth"});
-        return;
-      }
-      // Toggle week rows
+      if (weekRows.length === 0) return;
       const isVisible = weekRows[0].style.display !== "none";
       weekRows.forEach(r => r.style.display = isVisible ? "none" : "");
       const tog = row.querySelector(".week-toggle");
