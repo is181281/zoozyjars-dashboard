@@ -353,8 +353,17 @@ try:
             continue
         if "pause_collection" in prev and prev["pause_collection"] is None:
             paused_at_map[sub_id] = ev.created
+    # For subs paused since creation (no event with pause_collection change),
+    # use sub.created as the pause date
+    for s in subs:
+        sid = s.id
+        if sid in paused_at_map:
+            continue
+        pc = _attr(s, "pause_collection")
+        if pc:
+            paused_at_map[sid] = s.created
 except stripe.error.PermissionError:
-    print("   (no event-read permission — pause date will fall back to current_period_start)")
+    print("   (no event-read permission — pause date will fall back to sub.created)")
 
 # ------------------------------------------------------------
 # NORMALIZE SUBSCRIPTIONS
