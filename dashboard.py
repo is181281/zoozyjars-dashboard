@@ -1037,6 +1037,7 @@ HTML_TEMPLATE = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ZoozyJars · Subscriptions Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%239B7D35'/><path d='M20 70 L35 45 L50 55 L65 30 L80 40' stroke='white' stroke-width='6' fill='none' stroke-linecap='round' stroke-linejoin='round'/><circle cx='75' cy='22' r='5' fill='white'/><circle cx='65' cy='22' r='5' fill='white'/><circle cx='70' cy='15' r='5' fill='white'/><circle cx='70' cy='26' r='3.5' fill='white'/></svg>">
 <style>
 * { box-sizing: border-box; }
 body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; color: #1a1a1a; background: #faf8f3; margin: 0; }
