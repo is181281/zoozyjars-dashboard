@@ -46,11 +46,17 @@ EXCLUDE_SUB_IDS = {
     "sub_1TNu3cFTFpBXf4s3uXlKafw6",  # Igor test sub
     "sub_1TOvG6FTFpBXf4s3q32zlQFY",  # Fedya — canceled the old one and made a new one (sub_1TR9xY...)
     "sub_1Tau2iFTFpBXf4s3lABoJeVu",  # Dmytro Matsalyshenko — incomplete (failed payment link attempt)
+    "sub_1TZR4kFTFpBXf4s3Pn3wpQu3",  # s.samorajczyk — duplicate sub (canceled, keep sub_1TZR4E)
 }
 
 # Exclude customers entirely (their subs AND invoices won't show up anywhere).
 EXCLUDE_CUSTOMER_IDS = {
     "cus_UMcyIVM20sY0nm",  # Igor (cielo8008@gmail.com) — test account
+}
+
+# Manual LTV adjustments for pre-Stripe payments (customer_id → EUR amount).
+MANUAL_LTV_EUR = {
+    "cus_Ua4d2ap07MBveG": 175.0,  # Dmytro Matsalyshenko — paid before Stripe
 }
 
 # ------------------------------------------------------------
@@ -286,15 +292,27 @@ print(f"   {len(refunds)} successful refunds")
 # ------------------------------------------------------------
 # FACEBOOK ADS SPEND (for CAC per cohort)
 # ------------------------------------------------------------
-fb_spend_by_month = {}  # "2026-04" → spend in EUR
-fb_spend_by_week = {}   # "2026-W16" → spend in EUR
+fb_spend_by_month = {}  # "2026-04" → spend in EUR (total)
+fb_spend_by_week = {}   # "2026-MM:YYYY-Wnn" → spend in EUR (total)
+# Per-market ad spend: campaign names starting with "NL" or "BE" → NL-BE, rest → PL
+fb_spend_market_month = {"PL": {}, "NL-BE": {}}  # market → month → EUR
+fb_spend_market_week = {"PL": {}, "NL-BE": {}}   # market → week → EUR
 fb_token = os.environ.get("FB_ACCESS_TOKEN", "")
 fb_ad_account = os.environ.get("FB_AD_ACCOUNT_ID", "")
+
+def _campaign_market(campaign_name):
+    """Detect market from campaign name. NL*/BE* → NL-BE, rest → PL."""
+    if not campaign_name:
+        return "PL"
+    name = campaign_name.upper().strip()
+    if name.startswith(("NL", "BE")):
+        return "NL-BE"
+    return "PL"
+
 if fb_token and fb_ad_account:
     print("→ Facebook Ads spend...", flush=True)
     try:
-        # Fetch daily spend, then aggregate by month.
-        # Uses CUTOFF_DATE as start so pre-cutoff pixel warmup spend is excluded.
+        # Fetch daily spend at campaign level to split by market.
         params = urllib.parse.urlencode({
             "access_token": fb_token,
             "time_range": json.dumps({
@@ -302,29 +320,43 @@ if fb_token and fb_ad_account:
                 "until": dt.date.today().isoformat(),
             }),
             "time_increment": "1",
-            "fields": "spend,date_start",
-            "level": "account",
-            "limit": "500",
+            "fields": "spend,date_start,campaign_name",
+            "level": "campaign",
+            "limit": "1000",
         })
         url = f"https://graph.facebook.com/v21.0/{fb_ad_account}/insights?{params}"
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=30) as resp:
             fb_data = json.loads(resp.read())
-        fb_spend_by_week = {}  # "YYYY-MM:YYYY-Wnn" → spend in EUR (month-scoped)
-        for row in fb_data.get("data", []):
-            day = row["date_start"]  # "YYYY-MM-DD"
+        # Handle pagination
+        fb_rows = fb_data.get("data", [])
+        while fb_data.get("paging", {}).get("next"):
+            req = urllib.request.Request(fb_data["paging"]["next"])
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                fb_data = json.loads(resp.read())
+            fb_rows.extend(fb_data.get("data", []))
+        fb_spend_by_week = {}
+        for row in fb_rows:
+            day = row["date_start"]
             if day < CUTOFF_DATE:
                 continue
             month = day[:7]
             week = month + ":" + dt.date.fromisoformat(day).strftime("%G-W%V")
             spend_eur = float(row.get("spend", 0))
-            # FB reports in account currency (PLN for this account)
             spend_eur *= FX_TO_EUR.get("pln", 0.235)
+            campaign = row.get("campaign_name", "")
+            mkt = _campaign_market(campaign)
+            # Total
             fb_spend_by_month[month] = fb_spend_by_month.get(month, 0) + spend_eur
             fb_spend_by_week[week] = fb_spend_by_week.get(week, 0) + spend_eur
+            # Per market
+            fb_spend_market_month[mkt][month] = fb_spend_market_month[mkt].get(month, 0) + spend_eur
+            fb_spend_market_week[mkt][week] = fb_spend_market_week[mkt].get(week, 0) + spend_eur
         print(f"   {len(fb_spend_by_month)} months of ad spend data")
         for m in sorted(fb_spend_by_month):
-            print(f"     {m}: €{fb_spend_by_month[m]:.0f}")
+            pl = fb_spend_market_month["PL"].get(m, 0)
+            nlbe = fb_spend_market_month["NL-BE"].get(m, 0)
+            print(f"     {m}: €{fb_spend_by_month[m]:.0f} (PL €{pl:.0f}, NL-BE €{nlbe:.0f})")
     except Exception as e:
         print(f"   (warning: could not fetch FB ads spend: {e})")
 else:
@@ -368,6 +400,20 @@ except stripe.error.PermissionError:
 # ------------------------------------------------------------
 # NORMALIZE SUBSCRIPTIONS
 # ------------------------------------------------------------
+def detect_market(country, currency):
+    """Determine market segment: PL, NL-BE, or Other."""
+    if country:
+        c = country.upper()
+        if c == "PL":
+            return "PL"
+        if c in ("NL", "BE"):
+            return "NL-BE"
+        return "Other"
+    # Fallback: PLN currency → PL, everything else → Other
+    if currency and currency.lower() == "pln":
+        return "PL"
+    return "Other"
+
 def sub_row(s):
     cust = s.customer if not isinstance(s.customer, str) else None
     items = []
@@ -405,6 +451,10 @@ def sub_row(s):
         }
 
     cust_addr = _attr(cust, "address") if cust else None
+    country = _attr(cust_addr, "country") if cust_addr else None
+    # Determine currency from first item (for market fallback)
+    item_currency = items[0]["currency"] if items else None
+    market = detect_market(country, item_currency)
     # phase: are they still in their initial trial (haven't been charged a renewal yet)
     # or have they passed trial and started paying? Independent of cancel/pause intent.
     phase = "trial" if s.status == "trialing" else "paid"
@@ -413,7 +463,8 @@ def sub_row(s):
         "customer_id": _attr(cust, "id") if cust else s.customer,
         "email": _attr(cust, "email") if cust else None,
         "name": _attr(cust, "name") if cust else None,
-        "country": _attr(cust_addr, "country") if cust_addr else None,
+        "country": country,
+        "market": market,
         "lang": detect_lang(cust) if cust else None,
         "phase": phase,
         "raw_status": s.status,
@@ -616,6 +667,9 @@ for r in refunds:
     cid = _pi_to_customer.get(pi_id)
     if cid:
         _pi_by_customer[cid] -= to_eur(r.amount, r.currency)
+# Add manual pre-Stripe LTV adjustments
+for cid, adj in MANUAL_LTV_EUR.items():
+    _pi_by_customer[cid] += adj
 for cid, total in _pi_by_customer.items():
     cohort = customer_cohort.get(cid)
     week = customer_cohort_week.get(cid)
@@ -729,6 +783,145 @@ for k in sorted(subs_by_cohort.keys()):
     cohort_table.append(entry)
 
 # ------------------------------------------------------------
+# PER-MARKET COHORTS, FUNNEL, KPIs
+# ------------------------------------------------------------
+MARKETS = ["All", "PL", "NL-BE"]
+
+def _build_kpi(rows):
+    sc = Counter(s["status"] for s in rows)
+    pc = Counter()
+    for s in rows:
+        if s["status"] in ("active", "paused", "canceling"):
+            pc[(s["status"], s["phase"])] += 1
+    mrr = round(sum(s["mrr_eur"] for s in rows if s["status"] == "active"), 2)
+    mrr_p = round(sum(s["mrr_eur"] for s in rows if s["status"] == "active" and s["phase"] == "paid"), 2)
+    na = max(sc.get("active", 0), 1)
+    n30 = sum(1 for s in rows if s["created"] >= d30)
+    c30 = sum(1 for s in rows if s["canceled_at"] and s["canceled_at"] >= d30)
+    return {
+        "active": sc.get("active", 0),
+        "active_trial": pc.get(("active", "trial"), 0),
+        "active_paid": pc.get(("active", "paid"), 0),
+        "paused": sc.get("paused", 0),
+        "paused_trial": pc.get(("paused", "trial"), 0),
+        "paused_paid": pc.get(("paused", "paid"), 0),
+        "canceling": sc.get("canceling", 0),
+        "canceling_trial": pc.get(("canceling", "trial"), 0),
+        "canceling_paid": pc.get(("canceling", "paid"), 0),
+        "canceled": sc.get("canceled", 0),
+        "at_risk": sc.get("at_risk", 0),
+        "incomplete": sc.get("incomplete", 0),
+        "mrr_eur": mrr,
+        "mrr_paid_only": mrr_p,
+        "arr_eur": round(mrr * 12, 2),
+        "avg_mrr": round(mrr / na, 2),
+        "new_30d": n30,
+        "churned_30d": c30,
+    }
+
+def _build_cohort_table_for(rows, mkt_revenue_month, mkt_spend_month, mkt_spend_week):
+    # Group by month
+    by_cohort = defaultdict(list)
+    for s in rows:
+        cohort = dt.datetime.utcfromtimestamp(s["created"]).strftime("%Y-%m")
+        by_cohort[cohort].append(s)
+    # Group by week
+    by_week = defaultdict(list)
+    for s in rows:
+        by_week[s["week"]].append(s)
+    # LTV per cohort/week for this market subset
+    cust_ids = {s["customer_id"] for s in rows}
+    m_ltv_by_cohort = defaultdict(float)
+    m_ltv_by_week = defaultdict(float)
+    for cid in cust_ids:
+        total = _pi_by_customer.get(cid, 0)
+        cohort = customer_cohort.get(cid)
+        week = customer_cohort_week.get(cid)
+        if cohort:
+            m_ltv_by_cohort[cohort] += total
+        if week:
+            m_ltv_by_week[week] += total
+    table = []
+    for k in sorted(by_cohort.keys()):
+        cs = by_cohort[k]
+        revenue = mkt_revenue_month.get(k, 0.0)
+        ad_spend = mkt_spend_month.get(k, 0)
+        cohort_ltv = m_ltv_by_cohort.get(k, 0)
+        month_weeks = sorted(set(s["week"] for s in cs))
+        weeks = []
+        for w in month_weeks:
+            ws = by_week.get(w, [])
+            if ws:
+                weeks.append(_build_cohort_entry(
+                    w, ws,
+                    mkt_spend_week.get(w, 0),
+                    m_ltv_by_week.get(w, 0),
+                    label=_week_label(w),
+                ))
+        entry = _build_cohort_entry(k, cs, ad_spend, cohort_ltv)
+        entry["revenue_eur"] = round(revenue, 0)
+        entry["weeks"] = weeks
+        table.append(entry)
+    return table
+
+now_ts = dt.datetime.utcnow().timestamp()
+d30 = now_ts - 30 * 86400
+
+# Per-market revenue: attribute each PaymentIntent to its customer's market
+_cust_market = {}  # customer_id → market
+for s in sub_rows:
+    _cust_market[s["customer_id"]] = s["market"]
+
+revenue_by_market_month = defaultdict(lambda: defaultdict(float))  # market → month → EUR
+for pi in payment_intents:
+    cid = pi.customer if isinstance(pi.customer, str) else _attr(pi.customer, "id")
+    mkt = _cust_market.get(cid, "Other")
+    month = month_warsaw(pi.created)
+    revenue_by_market_month[mkt][month] += to_eur(pi.amount, pi.currency)
+    revenue_by_market_month["All"][month] += to_eur(pi.amount, pi.currency)
+for r in refunds:
+    pi_id = _attr(r, "payment_intent")
+    cid = _pi_to_customer.get(pi_id)
+    if cid:
+        mkt = _cust_market.get(cid, "Other")
+        month = month_warsaw(r.created)
+        revenue_by_market_month[mkt][month] -= to_eur(r.amount, r.currency)
+        revenue_by_market_month["All"][month] -= to_eur(r.amount, r.currency)
+
+# Ad spend per market (from campaign-level FB data)
+fb_spend_by_market_month = {
+    "All": fb_spend_by_month,
+    "PL": fb_spend_market_month.get("PL", {}),
+    "NL-BE": fb_spend_market_month.get("NL-BE", {}),
+    "Other": {},
+}
+fb_spend_by_market_week = {
+    "All": fb_spend_by_week,
+    "PL": fb_spend_market_week.get("PL", {}),
+    "NL-BE": fb_spend_market_week.get("NL-BE", {}),
+    "Other": {},
+}
+
+cohorts_by_market = {}
+funnel_by_market = {}
+kpi_by_market = {}
+for mkt in MARKETS:
+    if mkt == "All":
+        mkt_subs = sub_rows
+    else:
+        mkt_subs = [s for s in sub_rows if s["market"] == mkt]
+    cohorts_by_market[mkt] = _build_cohort_table_for(
+        mkt_subs,
+        revenue_by_market_month[mkt],
+        fb_spend_by_market_month.get(mkt, {}),
+        fb_spend_by_market_week.get(mkt, {}),
+    )
+    funnel_by_market[mkt] = funnel_for(mkt_subs)
+    kpi_by_market[mkt] = _build_kpi(mkt_subs)
+
+print(f"   market breakdown: " + ", ".join(f"{m}={kpi_by_market[m]['active']}active" for m in MARKETS))
+
+# ------------------------------------------------------------
 # PRODUCTION FORECAST (active subs only, project upcoming charges)
 # ------------------------------------------------------------
 def forecast_window(days):
@@ -791,23 +984,9 @@ for cid, orders in by_customer.items():
     })
 
 # ------------------------------------------------------------
-# KPIs
+# KPIs (use pre-computed from market loop above)
 # ------------------------------------------------------------
-status_count = Counter(s["status"] for s in sub_rows)
-phase_count = Counter()
-for s in sub_rows:
-    if s["status"] in ("active", "paused", "canceling"):
-        phase_count[(s["status"], s["phase"])] += 1
-mrr_total = round(sum(s["mrr_eur"] for s in sub_rows if s["status"] == "active"), 2)
-mrr_paid_only = round(sum(s["mrr_eur"] for s in sub_rows if s["status"] == "active" and s["phase"] == "paid"), 2)
-arr_total = round(mrr_total * 12, 2)
-n_active = max(status_count.get("active", 0), 1)
-avg_mrr = round(mrr_total / n_active, 2)
-
-now_ts = dt.datetime.utcnow().timestamp()
-d30 = now_ts - 30 * 86400
-new_30d = sum(1 for s in sub_rows if s["created"] >= d30)
-churned_30d = sum(1 for s in sub_rows if s["canceled_at"] and s["canceled_at"] >= d30)
+kpi_all = kpi_by_market["All"]
 
 # Language breakdown of active MRR
 mrr_by_lang = defaultdict(float)
@@ -834,34 +1013,19 @@ data = {
     "generated_at": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
     "cutoff_date": CUTOFF_DATE,
     "fx_rates": FX_TO_EUR,
-    "kpi": {
-        "active": status_count.get("active", 0),
-        "active_trial": phase_count.get(("active", "trial"), 0),
-        "active_paid": phase_count.get(("active", "paid"), 0),
-        "paused": status_count.get("paused", 0),
-        "paused_trial": phase_count.get(("paused", "trial"), 0),
-        "paused_paid": phase_count.get(("paused", "paid"), 0),
-        "canceling": status_count.get("canceling", 0),
-        "canceling_trial": phase_count.get(("canceling", "trial"), 0),
-        "canceling_paid": phase_count.get(("canceling", "paid"), 0),
-        "canceled": status_count.get("canceled", 0),
-        "at_risk": status_count.get("at_risk", 0),
-        "incomplete": status_count.get("incomplete", 0),
-        "mrr_eur": mrr_total,
-        "mrr_paid_only": mrr_paid_only,
-        "arr_eur": arr_total,
-        "avg_mrr": avg_mrr,
-        "new_30d": new_30d,
-        "churned_30d": churned_30d,
-    },
+    "kpi": kpi_all,
     "mrr_by_lang": mrr_by_lang,
     "cycle_count": dict(cycle_count),
     "subs": sub_rows,
-    "cohorts": cohort_table,
+    "cohorts": cohorts_by_market["All"],
     "total_funnel_steps": total_funnel_steps,
     "trial_days": TRIAL_DAYS,
     "forecast": forecast,
     "ltv": ltv_data,
+    "markets": MARKETS,
+    "cohorts_by_market": cohorts_by_market,
+    "funnel_by_market": funnel_by_market,
+    "kpi_by_market": kpi_by_market,
 }
 
 # ------------------------------------------------------------
@@ -1026,6 +1190,12 @@ a.email:hover { text-decoration: underline; }
 
   <!-- Overview -->
   <div class="panel active" id="panel-overview">
+    <div class="filters" id="market-filter-overview">
+      <span class="label">Market</span>
+      <span class="filter-pill market-pill on" data-market="All">All</span>
+      <span class="filter-pill market-pill" data-market="PL">PL</span>
+      <span class="filter-pill market-pill" data-market="NL-BE">NL-BE</span>
+    </div>
     <div class="grid-3">
       <div class="card">
         <h3>Status breakdown</h3>
@@ -1057,6 +1227,13 @@ a.email:hover { text-decoration: underline; }
   <!-- Subscriptions -->
   <div class="panel" id="panel-subs">
     <div class="filters">
+      <span class="label">Market</span>
+      <select id="filter-market">
+        <option value="">all</option>
+        <option value="PL">PL</option>
+        <option value="NL-BE">NL-BE</option>
+      </select>
+      <span class="sep">|</span>
       <span class="label">Status</span>
       <span class="filter-pill on" data-status="all">All</span>
       <span class="filter-pill" data-status="active">Active</span>
@@ -1173,6 +1350,12 @@ a.email:hover { text-decoration: underline; }
 
   <!-- Cohorts -->
   <div class="panel" id="panel-cohorts">
+    <div class="filters" id="market-filter-bar">
+      <span class="label">Market</span>
+      <span class="filter-pill market-pill on" data-market="All">All</span>
+      <span class="filter-pill market-pill" data-market="PL">PL</span>
+      <span class="filter-pill market-pill" data-market="NL-BE">NL-BE</span>
+    </div>
     <div class="card">
       <h3>Funnel — retention</h3>
       <div class="muted" style="font-size:12px; margin-bottom: 14px;">
@@ -1345,7 +1528,7 @@ const fmt = {
 
 // ============ KPI strip ============
 function renderKPI() {
-  const k = DATA.kpi;
+  const k = getMarketData().kpi;
   // "Last updated" with relative age
   const gen = new Date(DATA.generated_at);
   const ageMs = Date.now() - gen.getTime();
@@ -1385,7 +1568,7 @@ function renderKPI() {
 
 // ============ Status pie (SVG) ============
 function renderStatusPie() {
-  const k = DATA.kpi;
+  const k = getMarketData().kpi;
   const data = [
     {label: "Active", value: k.active, color: "#5d8a3d"},
     {label: "Paused", value: k.paused, color: "#d4a843"},
@@ -1431,7 +1614,8 @@ function renderSecondaryTables() {
 }
 
 // ============ Subscriptions table ============
-let subsState = {status: "all", lang: "", cycle: "", phase: "", search: "", ordersOp: "", ordersVal: null, cohort: "", week: "", sortKey: "mrr_eur", sortDir: -1};
+let marketFilter = "All";  // global market filter: "All", "PL", "NL-BE"
+let subsState = {status: "all", lang: "", cycle: "", phase: "", search: "", ordersOp: "", ordersVal: null, cohort: "", week: "", market: "", sortKey: "mrr_eur", sortDir: -1};
 
 function subCohortKey(s) {
   return new Date(s.created * 1000).toISOString().slice(0, 7); // YYYY-MM
@@ -1785,6 +1969,7 @@ function populateLangFilter() {
 function filterSubs() {
   const q = subsState.search.toLowerCase();
   return DATA.subs.filter(s => {
+    if (subsState.market && s.market !== subsState.market) return false;
     if (subsState.status !== "all" && s.status !== subsState.status) return false;
     if (subsState.lang && s.lang !== subsState.lang) return false;
     if (subsState.cycle && String(s.period_days) !== subsState.cycle) return false;
@@ -1938,26 +2123,35 @@ function recomputeFunnels() {
     }
     return steps;
   }
-  // Total funnel
-  DATA.total_funnel_steps = bucketsFor(DATA.subs);
-  // Per cohort
-  const byCohort = {};
-  for (const s of DATA.subs) {
-    const cohort = new Date(s.created * 1000).toISOString().slice(0, 7);
-    (byCohort[cohort] = byCohort[cohort] || []).push(s);
-  }
-  // Per week (for sub-cohorts) — use Python-assigned week key
-  const byWeek = {};
-  for (const s of DATA.subs) {
-    if (s.week) (byWeek[s.week] = byWeek[s.week] || []).push(s);
-  }
-  for (const c of DATA.cohorts) {
-    if (byCohort[c.cohort]) c.steps = bucketsFor(byCohort[c.cohort]);
-    if (c.weeks) {
-      for (const w of c.weeks) {
-        if (byWeek[w.cohort]) w.steps = bucketsFor(byWeek[w.cohort]);
+  // Recompute funnels for all market views
+  function recomputeForSubset(subs, cohorts) {
+    const byCohort = {};
+    for (const s of subs) {
+      const cohort = new Date(s.created * 1000).toISOString().slice(0, 7);
+      (byCohort[cohort] = byCohort[cohort] || []).push(s);
+    }
+    const byWeek = {};
+    for (const s of subs) {
+      if (s.week) (byWeek[s.week] = byWeek[s.week] || []).push(s);
+    }
+    for (const c of cohorts) {
+      if (byCohort[c.cohort]) c.steps = bucketsFor(byCohort[c.cohort]);
+      if (c.weeks) {
+        for (const w of c.weeks) {
+          if (byWeek[w.cohort]) w.steps = bucketsFor(byWeek[w.cohort]);
+        }
       }
     }
+    return bucketsFor(subs);
+  }
+  // Total (All)
+  DATA.total_funnel_steps = recomputeForSubset(DATA.subs, DATA.cohorts);
+  DATA.funnel_by_market["All"] = DATA.total_funnel_steps;
+  // Per market
+  for (const mkt of (DATA.markets || [])) {
+    if (mkt === "All") continue;
+    const mktSubs = DATA.subs.filter(s => s.market === mkt);
+    DATA.funnel_by_market[mkt] = recomputeForSubset(mktSubs, DATA.cohorts_by_market[mkt] || []);
   }
   // Re-render dependent views
   renderCohorts();
@@ -1997,6 +2191,30 @@ function bindSyncSetup() {
         setSyncStatus("✗ PAT invalid", "err");
       }
     });
+  };
+}
+
+function bindMarketFilter() {
+  document.querySelectorAll(".market-pill").forEach(p => {
+    p.onclick = () => {
+      document.querySelectorAll(".market-pill").forEach(x => x.classList.remove("on"));
+      p.classList.add("on");
+      marketFilter = p.dataset.market;
+      // Sync subs market dropdown
+      const sel = document.getElementById("filter-market");
+      sel.value = marketFilter === "All" ? "" : marketFilter;
+      subsState.market = marketFilter === "All" ? "" : marketFilter;
+      renderKPI();
+      renderStatusPie();
+      renderCohorts();
+      renderPayback();
+      renderSubs();
+    };
+  });
+  // Subs market dropdown syncs with global filter
+  document.getElementById("filter-market").onchange = e => {
+    subsState.market = e.target.value;
+    renderSubs();
   };
 }
 
@@ -2161,8 +2379,18 @@ function decidedConv(st) {
   return decided > 0 ? (st.reached / decided * 100) : null;
 }
 
+function getMarketData() {
+  const m = marketFilter || "All";
+  return {
+    cohorts: DATA.cohorts_by_market[m] || DATA.cohorts,
+    funnel: DATA.funnel_by_market[m] || DATA.total_funnel_steps,
+    kpi: DATA.kpi_by_market[m] || DATA.kpi,
+  };
+}
+
 function renderCohorts() {
-  const steps = DATA.total_funnel_steps;
+  const md = getMarketData();
+  const steps = md.funnel;
   document.getElementById("total-funnel").innerHTML = steps.map(s => {
     const conv = decidedConv(s);
     const decided = s.reached + s.lost;
@@ -2212,8 +2440,8 @@ function renderCohorts() {
        <td class="num" style="color:${ltvCacColor}; font-weight:600;">${c.ltv_cac ? c.ltv_cac.toFixed(2) + 'x' : '<span class="muted" style="font-weight:normal;">—</span>'}</td>`;
   }
 
-  document.getElementById("cohort-table").innerHTML = DATA.cohorts.map(c => {
-    const hasWeeks = c.weeks && c.weeks.length > 1;
+  document.getElementById("cohort-table").innerHTML = md.cohorts.map(c => {
+    const hasWeeks = c.weeks && c.weeks.length > 0;
     const toggle = hasWeeks ? `<span class="week-toggle" style="cursor:pointer; font-size:11px; color:#8b8775; margin-left:4px;">▸</span>` : "";
     const monthRow = `<tr class="cohort-row" data-cohort="${c.cohort}" style="cursor:pointer;">
        <td><span class="cohort-label" data-cohort="${c.cohort}" title="Click to filter Subscriptions by this month"><b>${c.cohort}</b></span>${toggle}</td>
@@ -2289,7 +2517,12 @@ function renderCohorts() {
 // ============ Payback ============
 function renderPayback() {
   const cac = +document.getElementById("cac-input").value || 0;
-  const data = DATA.ltv;
+  // Filter LTV data by market
+  let data = DATA.ltv;
+  if (marketFilter && marketFilter !== "All") {
+    const marketCustIds = new Set(DATA.subs.filter(s => s.market === marketFilter).map(s => s.customer_id));
+    data = data.filter(c => marketCustIds.has(c.customer_id));
+  }
   let recovered = 0, totalLtv = 0;
   const daysToPayback = [];
   const buckets = {30: 0, 60: 0, 90: 0, 180: 0, 365: 0};
@@ -2590,6 +2823,7 @@ function initApp() {
   renderCohorts();
   renderPayback();
   bindTabs();
+  bindMarketFilter();
   bindSubsFilters();
   bindSyncSetup();
   bindForecast();
