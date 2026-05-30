@@ -1908,7 +1908,7 @@ async function pollRebuildStatus(btn) {
         if (recent.conclusion === "success") {
           btn.textContent = "✓ Done";
           if (confirm("Rebuild complete. Reload page now to see fresh data?")) {
-            location.reload(true);
+            window.location.href = location.pathname + "?t=" + Date.now();
           } else {
             btn.disabled = false;
             btn.textContent = "↻ Refresh now";
