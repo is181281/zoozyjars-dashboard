@@ -1036,6 +1036,9 @@ HTML_TEMPLATE = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>ZoozyJars · Subscriptions Dashboard</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%239B7D35'/><path d='M20 70 L35 45 L50 55 L65 30 L80 40' stroke='white' stroke-width='6' fill='none' stroke-linecap='round' stroke-linejoin='round'/><circle cx='75' cy='22' r='5' fill='white'/><circle cx='65' cy='22' r='5' fill='white'/><circle cx='70' cy='15' r='5' fill='white'/><circle cx='70' cy='26' r='3.5' fill='white'/></svg>">
 <style>
