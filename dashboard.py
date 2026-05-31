@@ -55,8 +55,14 @@ EXCLUDE_CUSTOMER_IDS = {
 }
 
 # Manual LTV adjustments for pre-Stripe payments (customer_id → EUR amount).
+# These are added to per-sub LTV display AND cohort LTV/CAC.
 MANUAL_LTV_EUR = {
     "cus_Ua4d2ap07MBveG": 175.0,  # Dmytro Matsalyshenko — paid before Stripe
+}
+# LTV-only adjustments: added to per-sub LTV display but NOT to cohort LTV/CAC.
+# Use for revenue that shouldn't inflate cohort ROI (e.g. prior orders from other channels).
+MANUAL_LTV_DISPLAY_ONLY_EUR = {
+    "cus_UcNxXGbpTa08f3": 329.0,  # Danylo Babak — prior orders before this subscription
 }
 
 # ------------------------------------------------------------
@@ -678,6 +684,10 @@ for cid, total in _pi_by_customer.items():
     ltv_by_cohort[cohort] += total
     if week:
         ltv_by_week[week] += total
+
+# Add display-only LTV (shown on sub row but excluded from cohort LTV/CAC)
+for cid, adj in MANUAL_LTV_DISPLAY_ONLY_EUR.items():
+    _pi_by_customer[cid] += adj
 
 # Annotate each sub with per-customer LTV and real start date (first payment, not sub creation)
 for s in sub_rows:
