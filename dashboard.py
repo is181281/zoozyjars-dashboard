@@ -684,11 +684,14 @@ for cid, total in _pi_by_customer.items():
     if week:
         ltv_by_week[week] += total
 
+# Snapshot cohort-eligible LTV before adding display-only adjustments
+_pi_by_customer_cohort = dict(_pi_by_customer)
+
 # Add display-only LTV (shown on sub row but excluded from cohort LTV/CAC)
 for cid, adj in MANUAL_LTV_DISPLAY_ONLY_EUR.items():
     _pi_by_customer[cid] += adj
 
-# Annotate each sub with per-customer LTV and real start date (first payment, not sub creation)
+# Annotate each sub with per-customer LTV (includes display-only)
 for s in sub_rows:
     s["ltv_eur"] = round(_pi_by_customer.get(s["customer_id"], 0), 2)
     first_pi = _first_pi_date.get(s["customer_id"])
@@ -712,10 +715,10 @@ for s in sub_rows:
         customer_cohort[cid] = cohort
         customer_cohort_week[cid] = week
 
-# Rebuild LTV by cohort/week with corrected dates
+# Rebuild LTV by cohort/week with corrected dates (using cohort-eligible LTV only)
 ltv_by_cohort.clear()
 ltv_by_week.clear()
-for cid, total in _pi_by_customer.items():
+for cid, total in _pi_by_customer_cohort.items():
     cohort = customer_cohort.get(cid)
     week = customer_cohort_week.get(cid)
     if not cohort:
