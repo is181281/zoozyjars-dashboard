@@ -56,13 +56,12 @@ EXCLUDE_CUSTOMER_IDS = {
 
 # Manual LTV adjustments for pre-Stripe payments (customer_id → EUR amount).
 # These are added to per-sub LTV display AND cohort LTV/CAC.
-MANUAL_LTV_EUR = {
-    "cus_Ua4d2ap07MBveG": 175.0,  # Dmytro Matsalyshenko — paid before Stripe
-}
+MANUAL_LTV_EUR = {}
 # LTV-only adjustments: added to per-sub LTV display but NOT to cohort LTV/CAC.
-# Use for revenue that shouldn't inflate cohort ROI (e.g. prior orders from other channels).
+# Use for revenue that shouldn't inflate cohort ROI (e.g. prior Shopify orders).
 MANUAL_LTV_DISPLAY_ONLY_EUR = {
-    "cus_UcNxXGbpTa08f3": 329.0,  # Danylo Babak — prior orders before this subscription
+    "cus_Ua4d2ap07MBveG": 175.0,   # Dmytro Matsalyshenko — Shopify orders
+    "cus_UcNxXGbpTa08f3": 329.0,   # Danylo Babak — Shopify orders
 }
 
 # ------------------------------------------------------------
