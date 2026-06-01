@@ -841,12 +841,12 @@ def _build_cohort_table_for(rows, mkt_revenue_month, mkt_spend_month, mkt_spend_
     by_week = defaultdict(list)
     for s in rows:
         by_week[s["week"]].append(s)
-    # LTV per cohort/week for this market subset
+    # LTV per cohort/week for this market subset (cohort-eligible only, no display-only)
     cust_ids = {s["customer_id"] for s in rows}
     m_ltv_by_cohort = defaultdict(float)
     m_ltv_by_week = defaultdict(float)
     for cid in cust_ids:
-        total = _pi_by_customer.get(cid, 0)
+        total = _pi_by_customer_cohort.get(cid, 0)
         cohort = customer_cohort.get(cid)
         week = customer_cohort_week.get(cid)
         if cohort:
