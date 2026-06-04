@@ -58,10 +58,17 @@ EXCLUDE_CUSTOMER_IDS = {
 # These are added to per-sub LTV display AND cohort LTV/CAC.
 MANUAL_LTV_EUR = {}
 # LTV-only adjustments: added to per-sub LTV display but NOT to cohort LTV/CAC.
-# Use for revenue that shouldn't inflate cohort ROI (e.g. prior Shopify orders).
+# Legacy Shopify orders — shows real customer value but doesn't inflate cohort ROI.
 MANUAL_LTV_DISPLAY_ONLY_EUR = {
-    "cus_Ua4d2ap07MBveG": 175.0,   # Dmytro Matsalyshenko — Shopify orders
-    "cus_UcNxXGbpTa08f3": 329.0,   # Danylo Babak — Shopify orders
+    "cus_UO6hFjyjsshOOD": 611.12,  # Oleksandr Pavlichuk
+    "cus_UNh5ofJStsLJjc": 380.73,  # Andrii Halynskyi
+    "cus_UcNxXGbpTa08f3": 329.19,  # Danylo Babak
+    "cus_UOAIvp5RlJIIip": 228.81,  # Andrii (foresttalion)
+    "cus_UT1Kptc1oTIdUf": 202.00,  # Iryna Kortyak
+    "cus_Ua4d2ap07MBveG": 175.40,  # Dmytro Matsalyshenko
+    "cus_USKheMnmwKVIx8": 145.10,  # Anna Jarzyna
+    "cus_USKh1ydAgjqSST": 120.42,  # Iwona Klepacka
+    "cus_UOOsoBE9d4ZtZC": 31.17,   # Aleksandra Rachfalska-Grabowska
 }
 
 # ------------------------------------------------------------
