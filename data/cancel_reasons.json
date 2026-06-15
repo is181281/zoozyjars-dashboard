@@ -108,5 +108,47 @@
   },
   "sub_1TaKmnFTFpBXf4s3JCZ8p633": {
     "reason": "refund Nie je (not eating)"
+  },
+  "sub_1TZFm4FTFpBXf4s3btFom2RC": {
+    "reason": "Nie je (not eating)",
+    "source": "lovable"
+  },
+  "sub_1Tb5zNFTFpBXf4s3SzqWXLYa": {
+    "reason": "not eating"
+  },
+  "sub_1TcNNDFTFpBXf4s3BQChflCq": {
+    "reason": "Nie je (not eating)",
+    "source": "lovable"
+  },
+  "sub_1TYeGwFTFpBXf4s3ByBcr3zc": {
+    "reason": "have_stock",
+    "source": "lovable"
+  },
+  "sub_1TddyOFTFpBXf4s3suzffbvW": {
+    "reason": "have_stock",
+    "source": "lovable"
+  },
+  "sub_1TTL7tFTFpBXf4s368w3KUIr": {
+    "reason": "Nie wiedział o subskrypcji",
+    "source": "lovable"
+  },
+  "sub_1TYjArFTFpBXf4s3uNwaCLth": {
+    "reason": "Nie je (not eating)",
+    "source": "lovable"
+  },
+  "sub_1TbLwnFTFpBXf4s3DTQpX3N7": {
+    "reason": "Za drogo",
+    "source": "lovable"
+  },
+  "sub_1TWEIHFTFpBXf4s3pADLzH1P": {
+    "reason": "dog_sick",
+    "source": "lovable"
+  },
+  "sub_1TblKjFTFpBXf4s35UgbfVkQ": {
+    "reason": "dog_refused",
+    "source": "lovable"
+  },
+  "sub_1TfyUlFTFpBXf4s3Zw1rPrfh": {
+    "reason": "Nie je (not eating)"
   }
 }
