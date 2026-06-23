@@ -519,6 +519,14 @@ def invoice_sub_id(inv):
         return None
     return _attr(sd, "subscription")
 
+# Build customer_id → subscription_id map for manual invoice fallback
+customer_to_sub = {}
+for s in sub_rows:
+    cid = s["customer_id"]
+    # Prefer the most recent (highest created) sub per customer
+    if cid and (cid not in customer_to_sub or s["created"] > customer_to_sub[cid][1]):
+        customer_to_sub[cid] = (s["id"], s["created"])
+
 renewals_per_sub = defaultdict(int)
 revenue_per_sub = defaultdict(float)
 for inv in invoices:
@@ -528,6 +536,12 @@ for inv in invoices:
         # skip zero-amount trial creation and plan changes; count cycle + manual
         continue
     sid = invoice_sub_id(inv)
+    if not sid and inv.billing_reason == "manual" and inv.customer:
+        # Manual invoices (e.g. mid-cycle charge after plan change) — attribute
+        # to the customer's subscription if we can find one
+        entry = customer_to_sub.get(inv.customer if isinstance(inv.customer, str) else inv.customer.id)
+        if entry:
+            sid = entry[0]
     if not sid:
         continue
     renewals_per_sub[sid] += 1
@@ -1524,8 +1538,10 @@ a.email:hover { text-decoration: underline; }
           <th class="num" title="Test box revenue this month">TB rev €</th>
           <th class="num" title="Renewal revenue this month">Ren rev €</th>
           <th class="num">Revenue €</th>
+          <th class="num" title="CAC × new acquisitions this month">CAC spend €</th>
           <th class="num" title="Revenue − CAC (no COGS)">Cashflow €</th>
           <th class="num" title="Renewal margin − CAC (with COGS)">P&L €</th>
+          <th class="num" title="Cumulative P&L">P&L cum €</th>
         </tr></thead>
         <tbody></tbody>
       </table>
@@ -2763,7 +2779,8 @@ function renderFC2() {
       renewalJars: fin.renewalJars,
       totalJars,
       tbRev, renewalRev: fin.renewalRev, totalRev,
-      cashflow, pnl,
+      cacSpend: cacOut,
+      cashflow, pnl, pnlCum: cum.pnl,
     });
   }
 
@@ -2781,8 +2798,10 @@ function renderFC2() {
       <td class="num">${fmt.eur(r.tbRev)}</td>
       <td class="num">${fmt.eur(r.renewalRev)}</td>
       <td class="num"><b>${fmt.eur(r.totalRev)}</b></td>
+      <td class="num" style="color:#a04540; font-weight:600;">${fmt.eur(r.cacSpend)}</td>
       <td class="num" style="color:${r.cashflow>=0?'#4a7c4a':'#a04540'}; font-weight:600;">${r.cashflow>=0?'+':''}${fmt.eur(r.cashflow)}</td>
       <td class="num" style="color:${r.pnl>=0?'#4a7c4a':'#a04540'}; font-weight:600;">${r.pnl>=0?'+':''}${fmt.eur(r.pnl)}</td>
+      <td class="num" style="color:${r.pnlCum>=0?'#4a7c4a':'#a04540'}; font-weight:600;">${r.pnlCum>=0?'+':''}${fmt.eur(r.pnlCum)}</td>
     </tr>
   `).join("");
   // Cumulative footer
@@ -2799,7 +2818,9 @@ function renderFC2() {
       <td class="num muted">—</td>
       <td class="num muted">—</td>
       <td class="num">${fmt.eur(cum.revenue)}</td>
+      <td class="num" style="color:#a04540;">${fmt.eur(cum.newAcq * p.cac)}</td>
       <td class="num" style="color:${cum.cashflow>=0?'#4a7c4a':'#a04540'};">${cum.cashflow>=0?'+':''}${fmt.eur(cum.cashflow)}</td>
+      <td class="num muted">—</td>
       <td class="num" style="color:${cum.pnl>=0?'#4a7c4a':'#a04540'};">${cum.pnl>=0?'+':''}${fmt.eur(cum.pnl)}</td>
     </tr>`;
 }
