@@ -1908,7 +1908,11 @@ async function triggerRebuild() {
     if (r.status === 204) {
       btn.textContent = "⟳ Building...";
       pollRebuildStatus(btn);
-    } else if (r.status === 401 || r.status === 403) {
+    } else if (r.status === 401) {
+      btn.disabled = false;
+      btn.textContent = "↻ Refresh now";
+      alert("GitHub rejected the token (401): it has expired or been revoked. Issue a new one and paste it via the Sync button. The dashboard still rebuilds itself every 2 hours regardless.");
+    } else if (r.status === 403) {
       btn.disabled = false;
       btn.textContent = "↻ Refresh now";
       alert("PAT lacks 'Actions: Read and write' permission. Edit your token on GitHub and re-paste via Sync button.");
