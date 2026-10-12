@@ -1665,10 +1665,16 @@ const REASON_KEY = "zj_cancel_reasons";
 const PAT_KEY = "zj_github_pat";
 const DEFAULT_PAT = "__GITHUB_PAT__";
 const REPO = "is181281/zoozyjars-dashboard";
-const REASONS_PATH = "data/cancel_reasons.json";
-const RAW_URL = `https://raw.githubusercontent.com/${REPO}/main/${REASONS_PATH}`;
-const API_URL = `https://api.github.com/repos/${REPO}/contents/${REASONS_PATH}`;
-let reasonFileSha = null;  // GitHub blob SHA, needed for PUT
+// Cancel reasons live in Supabase, reached through an edge function. They used
+// to be a JSON file pushed from the browser with a GitHub token baked into this
+// page: the token expired in June, the failure showed as a small "Bad PAT"
+// label, and four months of reasons never left the browser that typed them.
+// The analytics key below opens nothing but these two calls.
+const REASONS_URL = "__SUPABASE_URL__/functions/v1/cancel-reasons";
+const ANALYTICS_KEY = "__ANALYTICS_KEY__";
+function reasonHeaders() {
+  return {"x-analytics-key": ANALYTICS_KEY, "Content-Type": "application/json"};
+}
 let saveDebounce = null;
 
 function loadReasons() {
@@ -1698,7 +1704,7 @@ function setAnnotationField(subId, field, value) {
     all[subId][field] = value;
   }
   setReasons(all);
-  scheduleGithubSave();
+  scheduleGithubSave(subId);
 }
 function saveReason(subId, text) {
   setAnnotationField(subId, "reason", text && text.trim() ? text.trim() : null);
@@ -1755,12 +1761,12 @@ function setSyncStatus(text, color) {
                    color === "busy" ? "#8a6a25" : "#8b8775";
 }
 
-async function fetchReasonsFromGithub() {
-  // Public file, no auth needed for reading. Cache-bust to avoid stale CDN.
+async function fetchReasonsRemote() {
   try {
-    const r = await fetch(RAW_URL + "?t=" + Date.now());
+    const r = await fetch(REASONS_URL + "?t=" + Date.now(), {headers: reasonHeaders()});
     if (!r.ok) return null;
-    return await r.json();
+    const d = await r.json();
+    return d.reasons || null;
   } catch (e) {
     return null;
   }
@@ -1818,76 +1824,38 @@ function mergeExitReasons(exits) {
   return added;
 }
 
-async function fetchReasonFileSha() {
-  // Need SHA for PUT (GitHub API requirement)
-  const pat = localStorage.getItem(PAT_KEY) || DEFAULT_PAT;
-  if (!pat) return null;
-  try {
-    const r = await fetch(API_URL, {headers: {Authorization: `token ${pat}`}});
-    if (r.ok) {
-      const data = await r.json();
-      reasonFileSha = data.sha;
-      return data.sha;
-    }
-  } catch (e) {}
-  return null;
-}
-
-async function pushReasonsToGithub() {
-  const pat = localStorage.getItem(PAT_KEY) || DEFAULT_PAT;
-  if (!pat) return;
+async function saveReasonRemote(subId) {
+  const ann = loadReasons()[subId] || {};
   setSyncStatus("⟳ Saving...", "busy");
-  if (!reasonFileSha) await fetchReasonFileSha();
-  const content = JSON.stringify(loadReasons(), null, 2) + "\n";
-  const body = {
-    message: "Update cancel reasons",
-    content: btoa(unescape(encodeURIComponent(content))),
-    sha: reasonFileSha,
-  };
   try {
-    const r = await fetch(API_URL, {
-      method: "PUT",
-      headers: {Authorization: `token ${pat}`, "Content-Type": "application/json"},
-      body: JSON.stringify(body),
+    const r = await fetch(REASONS_URL, {
+      method: "POST",
+      headers: reasonHeaders(),
+      // Sent one subscription at a time, so two people editing different rows
+      // can no longer overwrite each other the way a whole-file PUT did.
+      body: JSON.stringify({
+        subscription_id: subId,
+        reason: ann.reason ?? null,
+        source: ann.source ?? null,
+      }),
     });
-    if (r.ok) {
-      const j = await r.json();
-      reasonFileSha = j.content.sha;
-      setSyncStatus("✓ Synced", "ok");
-    } else if (r.status === 409) {
-      // SHA conflict: refetch and retry once
-      reasonFileSha = null;
-      await fetchReasonFileSha();
-      const r2 = await fetch(API_URL, {
-        method: "PUT",
-        headers: {Authorization: `token ${pat}`, "Content-Type": "application/json"},
-        body: JSON.stringify({...body, sha: reasonFileSha}),
-      });
-      if (r2.ok) {
-        reasonFileSha = (await r2.json()).content.sha;
-        setSyncStatus("✓ Synced", "ok");
-      } else {
-        setSyncStatus("✗ Sync failed", "err");
-      }
-    } else if (r.status === 401 || r.status === 403) {
-      setSyncStatus("✗ Bad PAT", "err");
-    } else {
-      setSyncStatus("✗ Sync failed", "err");
-    }
+    setSyncStatus(r.ok ? "✓ Synced" : "✗ Sync failed", r.ok ? "ok" : "err");
   } catch (e) {
-    setSyncStatus("✗ Network error", "err");
+    setSyncStatus("✗ Sync failed", "err");
   }
 }
 
-function scheduleGithubSave() {
-  const pat = localStorage.getItem(PAT_KEY) || DEFAULT_PAT;
-  if (!pat) {
-    setSyncStatus("⊙ Local only", "muted");
-    return;
-  }
+let pendingSaves = new Set();
+
+function scheduleGithubSave(subId) {
+  if (subId) pendingSaves.add(subId);
   setSyncStatus("⟳ Pending...", "busy");
   if (saveDebounce) clearTimeout(saveDebounce);
-  saveDebounce = setTimeout(pushReasonsToGithub, 3000);
+  saveDebounce = setTimeout(async () => {
+    const ids = [...pendingSaves];
+    pendingSaves.clear();
+    for (const id of ids) await saveReasonRemote(id);
+  }, 1500);
 }
 
 // ----- Force rebuild (workflow_dispatch) -----
@@ -1977,7 +1945,7 @@ async function initReasonSync() {
     mergeExitReasons(exits);
   }
   // 1. Pull from GitHub on load and merge with localStorage (GitHub wins on conflict)
-  const remote = await fetchReasonsFromGithub();
+  const remote = await fetchReasonsRemote();
   if (remote) {
     const local = loadReasons();
     // Merge: for each sub, prefer remote fields but keep any local-only fields
@@ -1993,14 +1961,9 @@ async function initReasonSync() {
   refreshReasonOptions();
   if (typeof renderSubs === "function") renderSubs();
   if (typeof recomputeFunnels === "function") recomputeFunnels();
-  // 3. Mark sync status
-  const activePat = localStorage.getItem(PAT_KEY) || DEFAULT_PAT;
-  if (activePat) {
-    setSyncStatus("✓ Synced", "ok");
-    fetchReasonFileSha();
-  } else {
-    setSyncStatus("⊙ Read-only", "muted");
-  }
+  // 3. Mark sync status. Saving no longer depends on a token anyone has to
+  // keep alive, so the only question is whether the store answered.
+  setSyncStatus(remote ? "✓ Synced" : "✗ Offline", remote ? "ok" : "err");
 }
 
 function populateLangFilter() {
@@ -2204,36 +2167,26 @@ function recomputeFunnels() {
 function bindSyncSetup() {
   document.getElementById("sync-setup").onclick = () => {
     const cur = localStorage.getItem(PAT_KEY) || DEFAULT_PAT || "";
-    const masked = cur ? cur.slice(0, 8) + "…" + cur.slice(-4) : "(not set)";
-    const msg = `GitHub sync setup\n\n` +
-      `Current PAT: ${masked}\n\n` +
-      `To enable writing your reasons + force-refresh button:\n` +
-      `1. Go to github.com → Settings → Developer settings → Personal access tokens → Fine-grained tokens\n` +
-      `2. Generate new token, scope to repo "${REPO}"\n` +
-      `3. Permissions:\n` +
-      `   • Contents → Read and write (for cancel reasons)\n` +
-      `   • Actions → Read and write (for force refresh)\n` +
-      `4. Paste the token below\n\n` +
-      `Leave empty to clear / disable sync.\n` +
-      `Read works without PAT (anyone with dashboard access sees reasons).`;
+    const masked = cur ? cur.slice(0, 8) + "\u2026" + cur.slice(-4) : "(not set)";
+    // The token is only the force-refresh button now. Cancel reasons save
+    // themselves to Supabase and need nothing from GitHub.
+    const msg = `GitHub token (force-refresh button only)\n\n` +
+      `Current: ${masked}\n\n` +
+      `Cancel reasons no longer use this \u2014 they save straight to our own\n` +
+      `database and are visible from any device.\n\n` +
+      `The dashboard also rebuilds itself every 2 hours, so this button only\n` +
+      `saves you the wait.\n\n` +
+      `To set it: github.com \u2192 Settings \u2192 Developer settings \u2192\n` +
+      `Personal access tokens \u2192 Fine-grained, scope to "${REPO}",\n` +
+      `permission Actions \u2192 Read and write.\n\n` +
+      `Leave empty to clear.`;
     const newPat = prompt(msg, "");
-    if (newPat === null) return; // cancel
+    if (newPat === null) return;
     if (newPat.trim() === "") {
       localStorage.removeItem(PAT_KEY);
-      setSyncStatus("⊙ Read-only", "muted");
       return;
     }
     localStorage.setItem(PAT_KEY, newPat.trim());
-    setSyncStatus("⟳ Testing...", "busy");
-    fetchReasonFileSha().then(sha => {
-      if (sha) {
-        setSyncStatus("✓ Synced", "ok");
-        // Push current local data to remote immediately
-        pushReasonsToGithub();
-      } else {
-        setSyncStatus("✗ PAT invalid", "err");
-      }
-    });
   };
 }
 
@@ -2983,6 +2936,16 @@ else:
 # Inject GitHub PAT for refresh button (stored in env, not in source code)
 github_pat = os.environ.get("GH_DASHBOARD_PAT") or os.environ.get("GITHUB_PAT", "")
 html_out = html_out.replace("__GITHUB_PAT__", github_pat)
+
+# Cancel reasons read and write through our own edge function. The key is
+# scoped to that one function — unlike the GitHub token it replaces, which
+# could write to the repository.
+supabase_url = os.environ.get("SUPABASE_URL", "https://pdouptdmxfhmgztvdvlo.supabase.co").rstrip("/")
+analytics_key = os.environ.get("ANALYTICS_KEY", "")
+if not analytics_key:
+    print("   ! ANALYTICS_KEY not set — cancel reasons will be read-only", flush=True)
+html_out = html_out.replace("__SUPABASE_URL__", supabase_url)
+html_out = html_out.replace("__ANALYTICS_KEY__", analytics_key)
 
 # Always write index.html (entry point for GitHub Pages / web hosting)
 index_file = OUT_DIR / "index.html"
