@@ -1781,14 +1781,23 @@ const EXIT_REASON_LABELS = {
   dog_health_issues: "Problemy zdrowotne psa",
   switching_food: "Zmiana karmy",
   other: "Inne",
+  quality_issue: "Jakość / opakowanie / dostawa",
+  found_alternative: "Inna karma",
+  health_change: "Zmiana potrzeb zdrowotnych",
+  have_stock: "Pauza: zapas",
+  vacation: "Pauza: urlop",
+  dog_sick: "Pauza: pies choruje",
+  tight_budget: "Pauza: budżet",
+  dog_refused: "Pauza: pies nie je",
 };
-const LOVABLE_ANALYTICS_URL = "https://hpijmlgxtqwecnvvjyhs.supabase.co/functions/v1/get-analytics-data";
-const LOVABLE_ANALYTICS_KEY = "my-analytics-secret-2026-xyz159";
+// Exits are read from the site's current Supabase project; the old Lovable one stopped getting exits on 2026-09-04.
+const LOVABLE_ANALYTICS_URL = "__SUPABASE_URL__/functions/v1/get-analytics-data";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBkb3VwdGRteGZobWd6dHZkdmxvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIzOTkxNjcsImV4cCI6MjA5Nzk3NTE2N30.fdQVaFGlnWWKWDITZIrc1pA716-QVZOdEick8zQYlrs";
 
 async function fetchSubscriptionExits() {
   try {
     const r = await fetch(LOVABLE_ANALYTICS_URL + "?table=subscription_exits&limit=1000", {
-      headers: {"x-analytics-key": LOVABLE_ANALYTICS_KEY}
+      headers: {"x-analytics-key": ANALYTICS_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY, "apikey": SUPABASE_ANON_KEY}
     });
     if (!r.ok) return [];
     const j = await r.json();
@@ -1807,7 +1816,8 @@ function mergeExitReasons(exits) {
   for (const exit of exits) {
     const subId = exit.subscription_id;
     if (!subId) continue;
-    const label = EXIT_REASON_LABELS[exit.reason_code] || exit.reason_code || "";
+    const base = EXIT_REASON_LABELS[exit.reason_code] || exit.reason_code || "";
+    const label = exit.reason_text && exit.reason_text.trim() ? `${base}: ${exit.reason_text.trim()}` : base;
     if (!label) continue;
     // Only set if no manual reason exists yet
     if (!all[subId] || !all[subId].reason) {
